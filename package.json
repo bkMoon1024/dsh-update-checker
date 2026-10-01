@@ -1,0 +1,45 @@
+{
+  "name": "dsh-update-checker",
+  "version": "0.2.3",
+  "type": "module",
+  "description": "One-click check which installed DSH plugins have upstream updates (check only, never installs), with release notes.",
+  "license": "MIT",
+  "author": "daha1216",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daha1216/dsh-update-checker.git"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "client",
+    "locale/*.json",
+    "cordis.patch.yml",
+    "icon.svg"
+  ],
+  "icon": "./icon.svg",
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-connection"
+      ]
+    }
+  }
+}

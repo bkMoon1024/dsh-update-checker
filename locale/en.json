@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Plugin Update Checker",
+    "description": "One-click check which installed third-party plugins have upstream updates, with release notes. Check only, never installs."
+  }
+}
