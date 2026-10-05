@@ -286,6 +286,18 @@ async function handleRpc(ctx, endpoint, payload, signal) {
   if (signal?.aborted) return fail('cancelled', 'The request was cancelled.');
   const profileContext = ctx.profileContext;
   if (endpoint === 'check.run') {
+    // Freshness window: a click within 90s of a completed scan reuses its
+    // result instead of burning another ~15 upstream requests (the GitHub
+    // API allows only 60 anonymous calls/hour — ~6 rapid clicks would
+    // exhaust it and degrade every row to tag-only fallbacks).
+    if (
+      lastResult
+      && lastResult.profileDir === profileContext.dir
+      && Date.now() - new Date(lastResult.at).getTime() < 90_000
+      && !inFlightRun
+    ) {
+      return ok(lastResult);
+    }
     if (!inFlightRun || inFlightRun.dir !== profileContext.dir) {
       const promise = runCheck(profileContext.dir)
         .then((result) => {
