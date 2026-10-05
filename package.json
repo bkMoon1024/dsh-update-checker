@@ -1,6 +1,6 @@
 {
   "name": "dsh-update-checker",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "type": "module",
   "description": "One-click check which installed DSH plugins have upstream updates (check only, never installs), with release notes.",
   "license": "MIT",
@@ -41,5 +41,9 @@
         "@deepseek-ai/dsh-client-connection"
       ]
     }
+  },
+  "scripts": {
+    "test": "node test/checker.test.mjs && node test/http.test.mjs && node test/integration.test.mjs && node test/md.test.mjs && node test/render-harness.mjs",
+    "test:e2e": "node test/harness.mjs"
   }
 }

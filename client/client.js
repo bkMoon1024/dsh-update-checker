@@ -646,34 +646,39 @@ window.__ModuleLoader__.load({
       };
 
       const rows = data?.rows ?? [];
-      const groups = [
-        { id: 'updates', label: t('filterUpdates'), count: 0 },
-        { id: 'current', label: t('statusLatest'), count: 0 },
-        { id: 'local', label: t('filterLocal'), count: 0 },
-        { id: 'issues', label: t('filterIssues'), count: 0 },
-      ];
-      for (const row of rows) {
-        const group = FILTER_OF[row.status];
-        if (group) {
-          const item = groups.find((g) => g.id === group);
-          if (item) item.count += 1;
+
+      // Derived lists are memoized so toggling one row's notes (an openNames
+      // update) does not re-run the group count + filter + sort pipeline.
+      const chipList = useMemo(() => {
+        const groups = [
+          { id: 'updates', label: t('filterUpdates'), count: 0 },
+          { id: 'current', label: t('statusLatest'), count: 0 },
+          { id: 'local', label: t('filterLocal'), count: 0 },
+          { id: 'issues', label: t('filterIssues'), count: 0 },
+        ];
+        for (const row of rows) {
+          const group = FILTER_OF[row.status];
+          if (group) {
+            const item = groups.find((g) => g.id === group);
+            if (item) item.count += 1;
+          }
         }
-      }
-      const chipList = [{ id: 'all', label: t('filterAll'), count: rows.length }, ...groups.filter((item) => item.count > 0)];
+        return [{ id: 'all', label: t('filterAll'), count: rows.length }, ...groups.filter((item) => item.count > 0)];
+      }, [rows, t]);
 
       // If the selected group vanished after a re-check (e.g. the only local-only
       // plugin gained an update), fall back to showing all rows instead of an
       // empty list that hides the newly available updates.
       const activeFilter = filter === 'all' || chipList.some((item) => item.id === filter) ? filter : 'all';
 
-      const visible = rows
+      const visible = useMemo(() => rows
         .filter((row) => activeFilter === 'all' || FILTER_OF[row.status] === activeFilter)
         .sort((a, b) => {
           if (sortMode === 'name') return a.name.localeCompare(b.name);
           return (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99) || a.name.localeCompare(b.name);
-        });
+        }), [rows, activeFilter, sortMode]);
 
-      const expandable = visible.filter(hasNotesRow);
+      const expandable = useMemo(() => visible.filter(hasNotesRow), [visible]);
       const allExpanded = expandable.length > 0 && expandable.every((row) => openNames.has(row.name));
       const setAllOpen = (open) => {
         setOpenNames(open ? new Set(expandable.map((row) => row.name)) : new Set());

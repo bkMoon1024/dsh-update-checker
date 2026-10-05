@@ -14,14 +14,22 @@ DSH 插件：在设置的「插件更新」页一键检查本机已安装的第�
 - 更新内容来自 GitHub Releases（当前版本到最新版本之间的所有条目）。GitHub API 不可达时回退 jsDelivr 的 tag 列表（只有版本号，无正文）；GitHub API 匿名限额 60 次/小时/IP。
 - 客户端设置页通过 Connection RPC 通道（`/dsh-update-checker`）调用宿主端。宿主端把该通道以 `kind:'prefix'` 路由挂到自身 inject 的 `webServer` 上，逐分支复刻官方 `/api` 传输协议（client-request → server-response 信封），并用 `connection.requestRejection` 做请求栅栏（旧版回退 loopback 校验）。不使用 `ctx.connection.rpc.handle`：当前 dsh 桌面构建中该方法内部访问 `owner.webServer` 会抛 `cannot get property "webServer" without inject`（dsh-pocket lib/web-rpc.js 记录了同一回归），仅作为无 webServer 的 headless 环境兜底。
 
-## 性能与健壮性设计
+## 性能与健壮性设计（v0.3.0 重构）
 
-- 单请求超时 8s（registry 正常 <2s）；最坏离线链条 ≈40s，不会挂死。
-- GitHub API 限流（403/429，匿名 60 次/时/IP）时直接降级 jsDelivr tag 列表（版本对比仍可用，仅缺正文），不再整行报错。
+- **统一出站层 `lib/http.js`**：所有 registry/CDN/GitHub 请求走同一层，提供四件套——
+  - **全局限流**：并发上限 6，N 个插件 × M 个端点不会同时开 N×M 个连接；
+  - **单飞合并**：同 URL 并发请求共享一次网络调用（两个插件指同一仓库只花一次 releases 查询）；
+  - **TTL 缓存 + ETag 条件请求**：响应 5 分钟内直接走内存；过期但有 ETag 的条目发 `If-None-Match` 再验证，**GitHub 304 不消耗匿名配额**——重复扫描从「每次 15+ 请求」降到「几乎零成本」；
+  - **主机熔断**：GitHub 403/429 后按 `x-ratelimit-reset` 短路该主机（默认 60s），后续行直接走 jsDelivr 回退，不再浪费注定失败的请求。
+- **npm dist-tags 快路径**：先用 ~200B 的 `/-/package/<name>/dist-tags` 判定「已是最新」（最常见情形一个微请求收工）；只有真过期的包才拉 abbreviated packument（billion-context 这类活跃包的 packument 是 MB 级，过去每次扫描都要白拉）。
+- **预发布双保险**：发行说明与「最新稳定版」判定同时看 GitHub prerelease 标记和标签形态（`-rc`/`-beta`），作者忘勾标记也不会把 rc 当稳定版。
+- 单请求超时 8s，用 REF'd 定时器实现（`AbortSignal.timeout` 的定时器不保活事件循环，裸环境永不触发——库代码不能依赖宿主恰好有其他活动）；最坏离线链条 ≈40s，不会挂死。
+- 失败的 URL 不缓存（每次扫描重试），成功的 URL 进 TTL 缓存；缓存条目带 etag 的过期后条件再验证。
 - 并发 check.run 服务端去重为一次扫描，保护 registry 配额；被共享的扫描不挂调用方 signal（一个客户端离开不会杀掉其他人的结果）。
 - 单条 release 正文上限 64K 字符，防止上游病态 changelog 撑爆响应与 DOM。
-- 缓存文件按 profile 分离：`~/.dsh/dsh-update-checker/last-<profile>.json`（兼容读取 ≤0.2.0 的旧平铺文件）。
-- 更新内容默认折叠，仅展开的行渲染正文。
+- 结果持久化原子写（tmp + rename），崩溃不会留下半截缓存文件；缓存按 profile 分离：`~/.dsh/dsh-update-checker/last-<profile>.json`（兼容读取 ≤0.2.0 的旧平铺文件）；内存缓存命中校验 profileDir，多 profile 宿主不串台。
+- 客户端分组/过滤/排序全部 `useMemo` 化，展开单行不再触发全列表重算。
+- 更新内容默认折叠，仅展开的行渲染正文；每次扫描的请求统计附在结果 `stats` 字段（requests/cacheHits/coalesced/revalidations/notModified）。
 
 ## 兼容性说明
 
@@ -51,11 +59,12 @@ dsh plugin --profile web add github:daha1216/dsh-update-checker
 ## 开发
 
 - `index.js` — 宿主端 Cordis 插件（webServer 路由 + RPC 信封 + 请求栅栏）
-- `lib/checker.js` — 检查逻辑（纯函数 + fetch，可独立测试）
+- `lib/http.js` — 统一出站层（限流 / 单飞 / TTL+ETag 缓存 / 主机熔断，fetch 可注入）
+- `lib/checker.js` — 检查逻辑（纯函数 + 出站层，layer 可注入）
 - `client/client.js` — 设置页（module-loader factory 格式，手写 React.createElement）
 - `locale/` — 插件卡片显示文案
-- `test/harness.mjs` — 独立端到端验证：真实 cordis + mock webServer/connection + 真实 profile，`node test/harness.mjs` 运行（17 项断言）
-- `test/md.test.mjs` — 设置页 markdown 解析器测试（23 例）
+- `npm test` — 离线测试全家桶：`test/checker.test.mjs`（纯函数 38 断言）+ `test/http.test.mjs`（出站层 19 例）+ `test/integration.test.mjs`（runCheck 集成 16 例，脚本化网络）+ `test/md.test.mjs`（markdown 23 例）+ `test/render-harness.mjs`（离线渲染冒烟）
+- `npm run test:e2e` — 独立端到端：真实 cordis + mock webServer/connection + 真实 profile + 活网络（17 项断言）
 
 无运行时依赖；peer 仅 `@deepseek-ai/cordis`。
 

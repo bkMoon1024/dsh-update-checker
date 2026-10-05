@@ -81,7 +81,11 @@ function lastResultFiles(profileContext) {
 async function persistLast(file, result) {
   try {
     await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, JSON.stringify(result), 'utf8');
+    // Atomic swap so a crash mid-write can never leave a truncated cache
+    // that check.last would happily JSON-parse-fail on next boot.
+    const tmp = `${file}.${process.pid}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(result), 'utf8');
+    await fs.rename(tmp, file);
   } catch {
     /* best-effort persistence */
   }
@@ -318,7 +322,9 @@ async function handleRpc(ctx, endpoint, payload, signal) {
     }
   }
   if (endpoint === 'check.last') {
-    if (lastResult) return ok(lastResult);
+    // Memory hit only within the same profile: a host process serving
+    // several profiles must not hand desktop's plugin set to another one.
+    if (lastResult && lastResult.profileDir === profileContext.dir) return ok(lastResult);
     for (const file of lastResultFiles(profileContext)) {
       try {
         return ok(JSON.parse(await fs.readFile(file, 'utf8')));
