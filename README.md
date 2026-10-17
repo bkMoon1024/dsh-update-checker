@@ -10,8 +10,8 @@ DSH 插件：在设置的「插件更新」页一键检查本机已安装的第�
 - 按安装来源分类检查：
   - **npm 版本号**（`^1.2.3`、`0.1.6` 等）：查询 npm registry（npmjs → npmmirror 依次回退）的 `dist-tags.latest`。
   - **GitHub 引用**（`github:owner/repo#tag`）：查询 GitHub Releases 最新版本；`#tag` 缺省时仅展示最新 Release 供参考。
-  - **本地安装**（`file:...`）：标记为本地开发安装；若包声明了 GitHub 仓库，附带展示上游最新版本作参考。
-- 更新内容来自 GitHub Releases（当前版本到最新版本之间的所有条目）。GitHub API 不可达时回退 jsDelivr 的 tag 列表（只有版本号，无正文）；GitHub API 匿名限额 60 次/小时/IP。
+  - **本地安装**（`file:...`）：标记为本地开发安装；若包声明了 GitHub 仓库，附带展示上游最新版本作参考（本地版本与上游一致 / 落后 / 领先分别标注）。
+- 更新内容来自 GitHub Releases（当前版本到最新版本之间的所有条目）。GitHub API 不可达时回退 jsDelivr 的 tag 列表（只有版本号，无正文）；GitHub API 匿名限额 60 次/小时/IP，可在宿主环境设置 `GITHUB_TOKEN`（或 `GH_TOKEN`）提升限额——插件会自动以 Bearer 头发送，未设置时保持匿名。
 - 客户端设置页通过 Connection RPC 通道（`/dsh-update-checker`）调用宿主端。宿主端把该通道以 `kind:'prefix'` 路由挂到自身 inject 的 `webServer` 上，逐分支复刻官方 `/api` 传输协议（client-request → server-response 信封），并用 `connection.requestRejection` 做请求栅栏（旧版回退 loopback 校验）。不使用 `ctx.connection.rpc.handle`：当前 dsh 桌面构建中该方法内部访问 `owner.webServer` 会抛 `cannot get property "webServer" without inject`（dsh-pocket lib/web-rpc.js 记录了同一回归），仅作为无 webServer 的 headless 环境兜底。
 
 ## 性能与健壮性设计（v0.3.0 重构）
@@ -27,9 +27,9 @@ DSH 插件：在设置的「插件更新」页一键检查本机已安装的第�
 - 失败的 URL 不缓存（每次扫描重试），成功的 URL 进 TTL 缓存；缓存条目带 etag 的过期后条件再验证。
 - 并发 check.run 服务端去重为一次扫描，保护 registry 配额；被共享的扫描不挂调用方 signal（一个客户端离开不会杀掉其他人的结果）。
 - 单条 release 正文上限 64K 字符，防止上游病态 changelog 撑爆响应与 DOM。
-- 结果持久化原子写（tmp + rename），崩溃不会留下半截缓存文件；缓存按 profile 分离：`~/.dsh/dsh-update-checker/last-<profile>.json`（兼容读取 ≤0.2.0 的旧平铺文件）；内存缓存命中校验 profileDir，多 profile 宿主不串台。
+- 结果持久化原子写（tmp + rename），崩溃不会留下半截缓存文件；缓存按 profile 分离：`~/.dsh/dsh-update-checker/last-<profile>.json`（兼容读取 ≤0.2.0 的旧平铺文件，但仅在文件内记录的 `profileDir` 与当前 profile 一致时才采用）；内存缓存命中与文件回退都校验 profileDir，多 profile 宿主不串台。
 - 客户端分组/过滤/排序全部 `useMemo` 化，展开单行不再触发全列表重算。
-- 更新内容默认折叠，仅展开的行渲染正文；每次扫描的请求统计附在结果 `stats` 字段（requests/cacheHits/coalesced/revalidations/notModified）。
+- 更新内容默认折叠，仅展开的行渲染正文（首次展开后才解析 markdown）；每次扫描的请求统计附在结果 `stats` 字段（requests/cacheHits/coalesced/revalidations/notModified），并在页面底部显示本次请求数与缓存命中数。
 
 ## 兼容性说明
 
@@ -41,7 +41,7 @@ DSH 插件：在设置的「插件更新」页一键检查本机已安装的第�
 ## 设置页 UI（v0.2.3 重设计）
 
 - **状态筛选 chips**：`全部 / 有更新 / 已是最新 / 本地 / 需关注`，兼作统计摘要；点击过滤，仅显示有内容的分组。
-- **默认按状态排序**（有更新 → 本地落后 → 异常 → 最新 → 本地 → 其他，同级按名称），可一键切换"按名称"。
+- **默认按状态排序**（有更新 → 本地落后 → 异常 → 无法比较 → 最新/本地一致/本地领先 → 跟踪分支 → 本地安装，同级按名称），可一键切换"按名称"。
 - **发行说明 markdown 渲染**：标题/有序无序列表/引用/分隔线/代码围栏/粗体/行内代码/链接（图片降级为链接）。纯字符串→AST→React 元素，全程无 innerHTML；解析器有独立测试（`node test/md.test.mjs`，23 例）。
 - **完整状态反馈**：缓存读取骨架屏、从未检查过的居中 CTA、错误横幅带"重试"、缓存超过 24h 提示"建议重新检查"、相对时间（悬停显示绝对时间）。
 - **展开状态提升到页面级**：重新检查后已展开的行保持展开；"展开全部/收起全部"（可展开行 ≥2 时出现）。
@@ -63,9 +63,24 @@ dsh plugin --profile web add github:daha1216/dsh-update-checker
 - `lib/checker.js` — 检查逻辑（纯函数 + 出站层，layer 可注入）
 - `client/client.js` — 设置页（module-loader factory 格式，手写 React.createElement）
 - `locale/` — 插件卡片显示文案
-- `npm test` — 离线测试全家桶：`test/checker.test.mjs`（纯函数 38 断言）+ `test/http.test.mjs`（出站层 19 例）+ `test/integration.test.mjs`（runCheck 集成 16 例，脚本化网络）+ `test/md.test.mjs`（markdown 23 例）+ `test/render-harness.mjs`（离线渲染冒烟）
-- `npm run test:e2e` — 独立端到端：真实 cordis + mock webServer/connection + 真实 profile + 活网络（17 项断言）
+- `npm test` — 离线测试全家桶：`test/checker.test.mjs`（纯函数 38 断言）+ `test/http.test.mjs`（出站层 19 例）+ `test/integration.test.mjs`（runCheck 集成 21 例，脚本化网络）+ `test/md.test.mjs`（markdown 23 例）+ `test/render-harness.mjs`（离线渲染冒烟）
+- `npm run test:e2e` — 独立端到端：真实 cordis + mock webServer/connection + 真实 profile + 活网络（17 项断言；缓存读写走临时 home，不污染真实安装）
 
 无运行时依赖；peer 仅 `@deepseek-ai/cordis`。
 
 注意：修改代码后重新 `install_bundle` 需先升 `package.json` 版本号（pnpm 按 name+version 缓存 file: 打包）。宿主端自 v0.2.2 起清理经 `ctx.effect` 正确接线，remove+install 热换已验证无需重启；设置页（client/client.js）改动需刷新一次 GUI 页面加载新脚本。
+
+## 更新日志
+
+### v0.3.1（2026-10-18）
+
+- **缓存按 profile 隔离**：`check.last` 的文件回退现在校验文件内 `profileDir` 与当前 profile 一致，多 profile 宿主不再串台。
+- **本地领先上游**：新增 `local-ahead` 状态，本地版本高于上游时显示「本地领先上游」，不再与「本地一致」混淆；本地安装行同样区分一致/落后/领先。
+- **非 semver 引用判分支**：GitHub 插件安装的是分支或 commit（如 `#main`、commit sha）时判为「跟踪分支」，不再永久挂「无法比较」。
+- **更新内容区间修正**：`releasesAfterTag` 改用版本比较确定停止点，上游 tag 无 `v` 前缀时也不会混入更旧版本的 release。
+- **GitHub 配额**：支持 `GITHUB_TOKEN` / `GH_TOKEN`（Bearer 头），未设置时保持匿名。
+- **可访问性与渲染**：折叠行改为真正的展开按钮（`aria-expanded`/`aria-controls`/`aria-label`，键盘可操作）；更新正文首次展开才解析渲染；无正文的 release 行不再显示空折叠区。
+- **页面统计**：结果页底部显示本次扫描的请求数与缓存命中数。
+- **样式作用域**：`prefers-reduced-motion` 规则收窄到插件页面，不再影响整个 DSH UI。
+- **排序统一**：宿主与客户端使用同一状态排序表。
+- 测试：离线 101 断言 + 渲染冒烟；E2E 17 项（缓存读写改用临时 home，不污染真实安装）。

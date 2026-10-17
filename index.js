@@ -327,7 +327,10 @@ async function handleRpc(ctx, endpoint, payload, signal) {
     if (lastResult && lastResult.profileDir === profileContext.dir) return ok(lastResult);
     for (const file of lastResultFiles(profileContext)) {
       try {
-        return ok(JSON.parse(await fs.readFile(file, 'utf8')));
+        const parsed = JSON.parse(await fs.readFile(file, 'utf8'));
+        // The legacy flat file is shared by every profile on this host; hand
+        // it over only when it was written for the profile asking.
+        if (parsed && parsed.profileDir === profileContext.dir) return ok(parsed);
       } catch {
         /* try the next candidate */
       }

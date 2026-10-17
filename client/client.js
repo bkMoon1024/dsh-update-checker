@@ -10,7 +10,8 @@
  *  - Color-mix tinted pill badges (brand / success / warn / error / neutral), no plain dot badges.
  *  - Fluid 0fr -> 1fr grid expand/collapse with 280ms cubic-bezier and visibility step.
  *  - Continuously mounted SVG chevron rotating 0deg -> 180deg.
- *  - Fully keyboard-operable trigger rows (Enter/Space, aria-expanded, aria-controls).
+ *  - Dedicated disclosure button per expandable row (aria-expanded, aria-controls),
+ *    plus whole-row mouse toggle.
  *  - Refined translucent markdown typography for release notes.
  *  - Native states: shimmer skeleton card, centered CTA with 48px tinted icon circle, error banner.
  *
@@ -41,6 +42,8 @@ window.__ModuleLoader__.load({
         statusLocal: '本地安装',
         statusLocalLatest: '本地 · 与上游一致',
         statusLocalBehind: '本地 · 上游有新版',
+        statusLocalAhead: '本地 · 领先上游',
+        statsLine: '本次扫描 %d 次请求 · %d 次缓存命中',
         statusBranch: '跟踪分支',
         statusUnknown: '无法比较',
         statusError: '检查失败',
@@ -83,6 +86,8 @@ window.__ModuleLoader__.load({
         statusLocal: 'Local install',
         statusLocalLatest: 'Local · matches upstream',
         statusLocalBehind: 'Local · behind upstream',
+        statusLocalAhead: 'Local · ahead of upstream',
+        statsLine: 'This scan: %d requests · %d cache hits',
         statusBranch: 'Tracking branch',
         statusUnknown: 'Cannot compare',
         statusError: 'Check failed',
@@ -121,6 +126,7 @@ window.__ModuleLoader__.load({
       local: 'statusLocal',
       'local-latest': 'statusLocalLatest',
       'local-behind': 'statusLocalBehind',
+      'local-ahead': 'statusLocalAhead',
       branch: 'statusBranch',
       unknown: 'statusUnknown',
       error: 'statusError',
@@ -130,6 +136,7 @@ window.__ModuleLoader__.load({
       update: 'brand',
       latest: 'success',
       'local-latest': 'success',
+      'local-ahead': 'success',
       local: 'neutral',
       branch: 'neutral',
       'local-behind': 'warn',
@@ -142,6 +149,7 @@ window.__ModuleLoader__.load({
       latest: 'var(--dsw-alias-state-success-primary, #12b886)',
       local: 'var(--dsw-alias-label-caption, rgba(128,128,128,0.7))',
       'local-latest': 'var(--dsw-alias-state-success-primary, #12b886)',
+      'local-ahead': 'var(--dsw-alias-state-success-primary, #12b886)',
       'local-behind': 'var(--dsw-alias-state-warn-primary, #e8590c)',
       branch: 'var(--dsw-alias-label-caption, rgba(128,128,128,0.7))',
       unknown: 'var(--dsw-alias-state-warn-primary, #e8590c)',
@@ -156,6 +164,7 @@ window.__ModuleLoader__.load({
       unknown: 3,
       latest: 4,
       'local-latest': 4,
+      'local-ahead': 4,
       branch: 5,
       local: 6,
     };
@@ -166,6 +175,7 @@ window.__ModuleLoader__.load({
       'local-behind': 'updates',
       latest: 'current',
       'local-latest': 'current',
+      'local-ahead': 'current',
       local: 'local',
       error: 'issues',
       unknown: 'issues',
@@ -447,7 +457,7 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dsh-uc-mono dsh-uc-version-latest-brand' }, row.latest || '?'),
         );
       }
-      if ((row.status === 'local-behind' || row.status === 'local-latest') && row.latest) {
+      if ((row.status === 'local-behind' || row.status === 'local-latest' || row.status === 'local-ahead') && row.latest) {
         return h(Fragment, null,
           h('span', { className: 'dsh-uc-mono' }, installed),
           h('span', { className: 'dsh-uc-version-dot' }, '·'),
@@ -469,10 +479,8 @@ window.__ModuleLoader__.load({
 
     function hasNotesRow(row) {
       const releases = row.releases ?? [];
-      return releases.length > 0
-        || row.status === 'update'
-        || row.releasesSource === 'jsdelivr'
-        || row.releasesSource === 'tags';
+      // A tag-only fallback with zero tags would expand to an empty box.
+      return releases.length > 0 || row.status === 'update';
     }
 
     function ReleaseNotes({ row, t }) {
@@ -518,6 +526,11 @@ window.__ModuleLoader__.load({
 
     function PluginRow({ row, t, open, onToggle }) {
       const notes = hasNotesRow(row);
+      // Mount notes on first open and keep them mounted afterwards, so the
+      // close animation still has content while never parsing markdown for
+      // rows the user never expands.
+      const [everOpen, setEverOpen] = useState(open);
+      useEffect(() => { if (open) setEverOpen(true); }, [open]);
       const linkUrl = row.repoUrl || row.pageUrl || row.homepage || '';
       const sourceLabel = row.kind === 'npm' ? 'npm' : row.kind === 'github' ? 'GitHub' : row.kind === 'file' ? t('localPath') : (row.kind || 'link');
       const tone = STATUS_TONE[row.status] ?? 'neutral';
@@ -531,19 +544,8 @@ window.__ModuleLoader__.load({
         'data-has-update': isUpdate ? 'true' : 'false',
       },
         h('div', {
-          role: notes ? 'button' : undefined,
-          tabIndex: notes ? 0 : undefined,
-          'aria-expanded': notes ? open : undefined,
-          'aria-controls': notes ? notesId : undefined,
-          'aria-label': notes ? `${row.name} - ${open ? t('hideNotes') : t('viewNotes')}` : undefined,
           className: `dsh-uc-row${notes ? ' dsh-uc-row-clickable' : ''}`,
           onClick: notes ? () => onToggle(row.name) : undefined,
-          onKeyDown: notes ? (event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              onToggle(row.name);
-            }
-          } : undefined,
         },
           h('div', { className: 'dsh-uc-icon-box', 'data-tone': tone },
             h(SourceIcon, { kind: row.kind }),
@@ -569,11 +571,14 @@ window.__ModuleLoader__.load({
               className: 'dsh-uc-row-link',
               title: linkUrl,
               onClick: (event) => event.stopPropagation(),
-              onKeyDown: (event) => event.stopPropagation(),
             }, `${sourceLabel} ↗`) : null,
-            notes ? h('span', {
-              className: 'dsh-uc-chevron',
-              'aria-hidden': true,
+            notes ? h('button', {
+              type: 'button',
+              className: 'dsh-uc-chevron-btn',
+              'aria-expanded': open,
+              'aria-controls': notesId,
+              'aria-label': `${row.name} - ${open ? t('hideNotes') : t('viewNotes')}`,
+              onClick: (event) => { event.stopPropagation(); onToggle(row.name); },
             }, h(IconChevron)) : null,
           ),
         ),
@@ -585,7 +590,7 @@ window.__ModuleLoader__.load({
         },
           h('div', { className: 'dsh-uc-collapse-inner' },
             h('div', { className: 'dsh-uc-details' },
-              h(ReleaseNotes, { row, t }),
+              everOpen || open ? h(ReleaseNotes, { row, t }) : null,
             ),
           ),
         ) : null,
@@ -774,6 +779,11 @@ window.__ModuleLoader__.load({
             open: openNames.has(row.name),
             onToggle: toggleOpen,
           })),
+        ) : null,
+        data?.stats ? h('div', { className: 'dsh-uc-stats' },
+          t('statsLine')
+            .replace('%d', String(data.stats.requests ?? 0))
+            .replace('%d', String(data.stats.cacheHits ?? 0)),
         ) : null,
       );
     }
@@ -1176,18 +1186,29 @@ window.__ModuleLoader__.load({
   transition: color 120ms ease, background 120ms ease;
   white-space: nowrap;
 }
-.dsh-uc-chevron {
+.dsh-uc-chevron-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  padding: 2px;
+  margin: -2px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
   color: var(--dsw-alias-label-caption, rgba(128,128,128,0.7));
-  transform: rotate(0deg);
-  transition: transform 240ms cubic-bezier(0.23, 1, 0.32, 1), color 140ms ease;
+  cursor: pointer;
   flex: none;
+  transition: color 140ms ease, background 120ms ease;
 }
-.dsh-uc-card[data-open="true"] .dsh-uc-chevron {
-  transform: rotate(180deg);
+.dsh-uc-chevron-btn svg {
+  transform: rotate(0deg);
+  transition: transform 240ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.dsh-uc-card[data-open="true"] .dsh-uc-chevron-btn {
   color: var(--dsw-alias-label-primary, inherit);
+}
+.dsh-uc-card[data-open="true"] .dsh-uc-chevron-btn svg {
+  transform: rotate(180deg);
 }
 
 /* Expandable Release Notes */
@@ -1429,10 +1450,19 @@ window.__ModuleLoader__.load({
   animation: dsh-uc-shimmer 1.4s ease-in-out infinite;
 }
 
+/* Scan Stats */
+.dsh-uc-stats {
+  padding: 4px 2px 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-caption, rgba(128,128,128,0.65));
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Focus Visible */
 .dsh-uc-btn:focus-visible,
 .dsh-uc-chip:focus-visible,
-.dsh-uc-row-clickable:focus-visible,
+.dsh-uc-chevron-btn:focus-visible,
 .dsh-uc-row-link:focus-visible,
 .dsh-uc-link-strong:focus-visible {
   outline: 2px solid var(--dsw-alias-brand-primary, #4c6ef5);
@@ -1464,14 +1494,21 @@ window.__ModuleLoader__.load({
     color: var(--dsw-alias-label-primary, inherit);
     background: var(--dsw-alias-bg-layer-2, rgba(128,128,128,0.12));
   }
+  .dsh-uc-chevron-btn:hover {
+    background: var(--dsw-alias-bg-layer-2, rgba(128,128,128,0.12));
+  }
   .dsh-uc-link-strong:hover {
     text-decoration: underline;
   }
 }
 
-/* Reduced Motion */
+/* Reduced Motion: scoped to this page — a global selector here would slow
+   every transition in the host UI while the page is mounted. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  .dsh-uc-page,
+  .dsh-uc-page *,
+  .dsh-uc-page *::before,
+  .dsh-uc-page *::after {
     transition-duration: 1ms !important;
     animation-duration: 1ms !important;
   }

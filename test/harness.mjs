@@ -12,6 +12,7 @@
 import { createServer, request as httpRequest } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 // Machine-specific paths are overridable via env; defaults resolve portably.
@@ -20,6 +21,30 @@ const CORDIS_URL = process.env.DSH_CORDIS_PATH
 const PLUGIN_URL = new URL('../index.js', import.meta.url).href;
 const PROFILE_DIR = process.env.DSH_PROFILE_DIR
   || `C:/Users/${os.userInfo().username}/.dsh/profiles/desktop`;
+
+// Isolated ~/.dsh home for the test: the scan still reads the real desktop
+// profile (live plugin set), but cache reads/writes must not touch the live
+// installation. Seed the per-profile file from the real cache so the cold-start
+// assertion still exercises the file fallback.
+const REAL_HOME = path.join(os.homedir(), '.dsh');
+const HOME_DIR = await mkdtemp(path.join(os.tmpdir(), 'dsh-uc-home-'));
+let seededAt = null;
+try {
+  await mkdir(path.join(HOME_DIR, 'dsh-update-checker'), { recursive: true });
+  const seeded = JSON.parse(await readFile(path.join(REAL_HOME, 'dsh-update-checker', 'last-desktop.json'), 'utf8'));
+  await writeFile(path.join(HOME_DIR, 'dsh-update-checker', 'last-desktop.json'), JSON.stringify(seeded));
+  seededAt = seeded?.at ?? null;
+} catch {
+  /* no live cache to seed from: cold start must fall back to null */
+}
+// Legacy flat cache written by another profile: the per-profile file must win.
+await writeFile(path.join(HOME_DIR, 'dsh-update-checker-last.json'), JSON.stringify({
+  at: '2000-01-01T00:00:00.000Z',
+  profileDir: 'C:/other-profile',
+  counts: {},
+  rows: [],
+  stats: {},
+}));
 
 const { Context } = await import(CORDIS_URL);
 const plugin = await import(PLUGIN_URL);
@@ -73,7 +98,7 @@ ctx.provide('connection', connection);
 ctx.provide('profileContext', {
   name: 'desktop',
   dir: PROFILE_DIR,
-  home: path.join(os.homedir(), '.dsh'),
+  home: HOME_DIR,
 });
 
 let applyError = null;
@@ -112,12 +137,17 @@ async function post(path, body, headers = {}) {
 }
 
 // 0. cold-start check.last: fresh process memory must fall back to the
-//    per-profile cache file (or the legacy flat file from <=0.2.0)
+//    per-profile cache file. A legacy flat file from another profile is present
+//    in the same home and must be ignored (profile isolation).
 if (activated) {
   try {
     const res = await post('/dsh-update-checker/check.last', envelope('check.last', undefined));
     const json = await res.json();
-    check('cold check.last reads persisted cache', json?.result?.ok === true && !!json?.result?.value?.at, `at=${json?.result?.value?.at}`);
+    const value = json?.result?.value;
+    const pass = seededAt
+      ? value?.at === seededAt
+      : json?.result?.ok === true && value === null;
+    check('cold check.last reads this profile cache (ignores other-profile legacy cache)', pass, seededAt ? `at=${value?.at}` : 'no live cache to seed');
   } catch (error) {
     check('cold check.last executed', false, String(error));
   }
@@ -151,10 +181,9 @@ if (activated) {
     check('concurrent check.run executed', false, String(error));
   }
 
-  // 1c. per-profile cache file written at the new location
+  // 1c. per-profile cache file written under the test home
   try {
-    const { readFile } = await import('node:fs/promises');
-    const cacheFile = path.join(os.homedir(), '.dsh', 'dsh-update-checker', 'last-desktop.json');
+    const cacheFile = path.join(HOME_DIR, 'dsh-update-checker', 'last-desktop.json');
     const cached = JSON.parse(await readFile(cacheFile, 'utf8'));
     check('per-profile cache file persisted', !!cached?.at && Array.isArray(cached?.rows), `${cacheFile}`);
   } catch (error) {
@@ -234,7 +263,8 @@ if (activated) {
 const failed = results.filter((r) => !r.pass);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
 
-// dispose: plugin cleanup + server close
+// dispose: plugin cleanup + server close + isolated home
 try { await ctx.dispose(); } catch { /* ignore */ }
 server.close();
+await rm(HOME_DIR, { recursive: true, force: true });
 process.exit(failed.length ? 1 : 0);
