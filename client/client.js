@@ -73,6 +73,37 @@ window.__ModuleLoader__.load({
         relMin: '%d 分钟前',
         relHour: '%d 小时前',
         relDay: '%d 天前',
+        askAi: '让 AI 更新',
+        askAiHint: '在输入框填好更新指令，发送后由 AI 执行',
+        askAiCopied: '已复制更新指令，粘贴到输入框发送即可',
+        askAiNoSession: '当前没有打开的会话，请先新建会话',
+        updateAction: '更新',
+        askAiPrompt: '帮我更新 %s 插件即可',
+        reminderTitle: '有 %d 个插件可以更新',
+        reminderEntry: '插件更新',
+        reminderPending: '%d 个可更新',
+        reminderIgnoreOnce: '忽略本次提醒',
+        reminderIgnoreAll: '全部忽略',
+        reminderCheck: '立即检查',
+        reminderChecking: '检查中…',
+        reminderEmpty: '没有待更新的插件。',
+        reminderNever: '还没检查过插件更新。',
+        reminderError: '上次检查失败',
+        reminderNoToken: 'GitHub 匿名限额较低，配置 token 可减少失败',
+        reminderIgnored: '已忽略，出现新版本时会再次提醒',
+        reminderSection: '后台提醒',
+        reminderEnabled: '定时检查插件更新',
+        reminderEnabledHint: '开启后会在后台定期检查，发现新版本时在左下角提醒。',
+        reminderInterval: '检查频率',
+        reminderIntervalMin: '每 %d 分钟',
+        reminderIntervalHour: '每 %d 小时',
+        reminderLastAt: '上次检查：%s',
+        reminderNeverChecked: '尚未检查',
+        reminderSaveFailed: '设置保存失败',
+        every30m: '每 30 分钟',
+        every1h: '每小时',
+        every2h: '每 2 小时',
+        every6h: '每 6 小时',
       },
       en: {
         sectionLabel: 'Plugin Updates',
@@ -117,6 +148,37 @@ window.__ModuleLoader__.load({
         relMin: '%d min ago',
         relHour: '%d h ago',
         relDay: '%d d ago',
+        askAi: 'Ask AI to update',
+        askAiHint: 'Fills the composer with an update request for the AI to run',
+        askAiCopied: 'Update request copied — paste it in the composer to send',
+        askAiNoSession: 'No open session — start one first',
+        updateAction: 'Update',
+        askAiPrompt: 'Please update the %s plugin',
+        reminderTitle: '%d plugin updates available',
+        reminderEntry: 'Plugin updates',
+        reminderPending: '%d to update',
+        reminderIgnoreOnce: 'Dismiss for now',
+        reminderIgnoreAll: 'Ignore all',
+        reminderCheck: 'Check now',
+        reminderChecking: 'Checking…',
+        reminderEmpty: 'Nothing to update.',
+        reminderNever: 'Plugin updates have not been checked yet.',
+        reminderError: 'Last check failed',
+        reminderNoToken: 'Anonymous GitHub quota is low — set a token to reduce failures',
+        reminderIgnored: 'Dismissed; it returns when a newer version appears',
+        reminderSection: 'Background reminder',
+        reminderEnabled: 'Check for plugin updates on a schedule',
+        reminderEnabledHint: 'Checks in the background and shows a reminder in the bottom-left corner when updates appear.',
+        reminderInterval: 'Frequency',
+        reminderIntervalMin: 'Every %d min',
+        reminderIntervalHour: 'Every %d h',
+        reminderLastAt: 'Last check: %s',
+        reminderNeverChecked: 'Not checked yet',
+        reminderSaveFailed: 'Could not save settings',
+        every30m: 'Every 30 min',
+        every1h: 'Hourly',
+        every2h: 'Every 2 hours',
+        every6h: 'Every 6 hours',
       },
     };
 
@@ -436,6 +498,24 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function IconArrowUp({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.4,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+      },
+        h('path', { d: 'M8 12.5v-9' }),
+        h('path', { d: 'M4.2 7.3L8 3.5l3.8 3.8' }),
+      );
+    }
+
     function SourceIcon({ kind }) {
       if (kind === 'github') return h(IconGithub, { size: 15 });
       if (kind === 'file') return h(IconFolder, { size: 15 });
@@ -524,7 +604,40 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function PluginRow({ row, t, open, onToggle }) {
+    /**
+     * Prefill the composer with an update request for one plugin. Returns the
+     * outcome so callers can tell the user what happened: 'draft' when the
+     * composer took the text, 'clipboard' when only a copy was possible.
+     */
+    function fillComposerDraft(ctx, text) {
+      let uiSession;
+      try {
+        uiSession = typeof ctx.get === 'function' ? ctx.get('uiSession') : undefined;
+      } catch {
+        uiSession = undefined;
+      }
+      uiSession = uiSession ?? ctx.uiSession;
+      const actions = uiSession?.adapter?.current?.getSnapshot?.()?.props?.inputActions;
+      if (actions && typeof actions.setDraft === 'function') {
+        try {
+          actions.setDraft(text);
+          return 'draft';
+        } catch {
+          /* fall through to the clipboard */
+        }
+      }
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+          void navigator.clipboard.writeText(text);
+          return 'clipboard';
+        }
+      } catch {
+        /* no clipboard either */
+      }
+      return 'none';
+    }
+
+    function PluginRow({ row, t, open, onToggle, onAskAi }) {
       const notes = hasNotesRow(row);
       // Mount notes on first open and keep them mounted afterwards, so the
       // close animation still has content while never parsing markdown for
@@ -564,6 +677,12 @@ window.__ModuleLoader__.load({
             ) : null,
           ),
           h('div', { className: 'dsh-uc-row-right' },
+            isUpdate ? h('button', {
+              type: 'button',
+              className: 'dsh-uc-btn dsh-uc-btn-sm dsh-uc-row-update',
+              title: t('askAiHint'),
+              onClick: (event) => { event.stopPropagation(); onAskAi(row); },
+            }, t('updateAction')) : null,
             linkUrl ? h('a', {
               href: linkUrl,
               target: '_blank',
@@ -605,12 +724,237 @@ window.__ModuleLoader__.load({
       );
     }
 
+    const INTERVAL_LABEL_KEY = { 30: 'every30m', 60: 'every1h', 120: 'every2h', 360: 'every6h' };
+    const INTERVAL_CHOICES = [30, 60, 120, 360];
+
+    /**
+     * Background-reminder controls. Lives at the bottom of the settings page so
+     * the page still leads with the plugin list, which is what people open it
+     * for.
+     */
+    function ReminderSettings({ rpcCall, t }) {
+      const [state, setState] = useState(null);
+      const [saving, setSaving] = useState(false);
+      const [failed, setFailed] = useState(false);
+
+      useEffect(() => {
+        let alive = true;
+        rpcCall('reminder.state', undefined)
+          .then((value) => { if (alive) setState(value); })
+          .catch(() => { /* the block stays hidden when the host is unreachable */ });
+        return () => { alive = false; };
+      }, []);
+
+      const save = async (patch) => {
+        setSaving(true);
+        setFailed(false);
+        try {
+          const value = await rpcCall('config.set', patch);
+          setState((previous) => ({ ...previous, config: value?.config ?? previous?.config }));
+        } catch {
+          setFailed(true);
+        } finally {
+          setSaving(false);
+        }
+      };
+
+      if (!state?.config) return null;
+      const config = state.config;
+      return h('div', { className: 'dsh-uc-card dsh-uc-settings-card' },
+        h('div', { className: 'dsh-uc-settings-head' },
+          h('div', { className: 'dsh-uc-settings-title' }, t('reminderSection')),
+          state.lastCheckAt
+            ? h('div', { className: 'dsh-uc-settings-meta' },
+              t('reminderLastAt').replace('%s', formatRelative(state.lastCheckAt, t)))
+            : h('div', { className: 'dsh-uc-settings-meta' }, t('reminderNeverChecked')),
+        ),
+        h('label', { className: 'dsh-uc-settings-row' },
+          h('input', {
+            type: 'checkbox',
+            className: 'dsh-uc-switch',
+            checked: config.enabled,
+            disabled: saving,
+            onChange: (event) => { void save({ enabled: event.target.checked }); },
+          }),
+          h('span', { className: 'dsh-uc-settings-label' },
+            t('reminderEnabled'),
+            h('span', { className: 'dsh-uc-settings-hint' }, t('reminderEnabledHint')),
+          ),
+        ),
+        h('div', { className: 'dsh-uc-settings-row' },
+          h('span', { className: 'dsh-uc-settings-label' }, t('reminderInterval')),
+          h('select', {
+            className: 'dsh-uc-select',
+            value: String(config.intervalMinutes),
+            disabled: saving || !config.enabled,
+            onChange: (event) => { void save({ intervalMinutes: Number(event.target.value) }); },
+          }, INTERVAL_CHOICES.map((minutes) => h('option', { key: minutes, value: String(minutes) },
+            t(INTERVAL_LABEL_KEY[minutes])))),
+        ),
+        state.lastError ? h('div', { className: 'dsh-uc-settings-error' },
+          `${t('reminderError')}: ${state.lastError}`) : null,
+        failed ? h('div', { className: 'dsh-uc-settings-error' }, t('reminderSaveFailed')) : null,
+      );
+    }
+
+    /**
+     * Footer entry beside the host's own update indicator: one line above the
+     * settings group, because the settings row itself exposes no slot.
+     */
+    function UpdateReminder({ wide, t, rpcCall, askAi }) {
+      const [state, setState] = useState(null);
+      const [open, setOpen] = useState(false);
+      const [anchor, setAnchor] = useState(null);
+      const [busy, setBusy] = useState(false);
+
+      const reload = async () => {
+        try {
+          setState(await rpcCall('reminder.state', undefined));
+        } catch { /* the next poll retries */ }
+      };
+
+      useEffect(() => {
+        let alive = true;
+        const tick = async () => {
+          try {
+            const value = await rpcCall('reminder.state', undefined);
+            if (alive) setState(value);
+          } catch { /* the next poll retries */ }
+        };
+        void tick();
+        const timer = setInterval(() => { void tick(); }, 60_000);
+        return () => { alive = false; clearInterval(timer); };
+      }, []);
+
+      // The panel is fixed-positioned outside the sidebar's overflow, so
+      // click-away and Esc are handled on the document instead of the tree.
+      useEffect(() => {
+        if (!open) return undefined;
+        const onPointer = (event) => {
+          const target = event.target;
+          if (target && typeof target.closest === 'function' && target.closest('[data-dsh-uc-reminder]')) return;
+          setOpen(false);
+        };
+        const onKey = (event) => { if (event.key === 'Escape') setOpen(false); };
+        document.addEventListener('pointerdown', onPointer, true);
+        document.addEventListener('keydown', onKey);
+        return () => {
+          document.removeEventListener('pointerdown', onPointer, true);
+          document.removeEventListener('keydown', onKey);
+        };
+      }, [open]);
+
+      const pending = state?.pending ?? [];
+      if (!state?.visible || pending.length === 0) return null;
+
+      const toggle = (event) => {
+        if (open) { setOpen(false); return; }
+        const rect = event.currentTarget.getBoundingClientRect();
+        setAnchor({ left: rect.left, bottom: window.innerHeight - rect.top + 8 });
+        setOpen(true);
+      };
+
+      const checkNow = async () => {
+        if (busy) return;
+        setBusy(true);
+        try {
+          await rpcCall('check.run', undefined);
+        } catch { /* surfaced by the settings page */ }
+        await reload();
+        setBusy(false);
+      };
+
+      const ignore = async (mode) => {
+        try {
+          setState(await rpcCall('reminder.ignore', { mode }));
+          setOpen(false);
+        } catch { /* keep the entry visible and let the user retry */ }
+      };
+
+      const ask = (row) => {
+        const outcome = askAi(t('askAiPrompt').replace('%s', row.name));
+        if (outcome !== 'none') setOpen(false);
+      };
+
+      return h('div', {
+        className: `dsh-uc-reminder${wide ? '' : ' dsh-uc-reminder-rail'}`,
+        'data-dsh-uc-reminder': 'true',
+      },
+        h('button', {
+          type: 'button',
+          className: 'dsh-uc-reminder-btn',
+          'aria-expanded': open,
+          'aria-haspopup': 'dialog',
+          'aria-label': t('reminderTitle').replace('%d', String(pending.length)),
+          title: t('reminderTitle').replace('%d', String(pending.length)),
+          onClick: toggle,
+        },
+          h(IconArrowUp, { size: wide ? 16 : 18 }),
+          wide ? h('span', { className: 'dsh-uc-reminder-label' }, t('reminderEntry')) : null,
+          wide ? h('span', { className: 'dsh-uc-reminder-count' }, pending.length) : null,
+        ),
+        open && anchor !== null ? h('div', {
+          className: 'dsh-uc-reminder-panel',
+          role: 'dialog',
+          'aria-label': t('reminderTitle').replace('%d', String(pending.length)),
+          style: { left: anchor.left, bottom: anchor.bottom },
+        },
+          h('div', { className: 'dsh-uc-reminder-panel-head' },
+            h('div', { className: 'dsh-uc-reminder-panel-title' },
+              t('reminderTitle').replace('%d', String(pending.length))),
+            h('button', {
+              type: 'button',
+              className: 'dsh-uc-btn dsh-uc-btn-ghost dsh-uc-btn-sm',
+              onClick: () => setOpen(false),
+              'aria-label': t('hideNotes'),
+            }, '×'),
+          ),
+          h('div', { className: 'dsh-uc-reminder-panel-body' },
+            pending.map((row) => h('div', { key: row.name, className: 'dsh-uc-reminder-row' },
+              h('div', { className: 'dsh-uc-reminder-row-info' },
+                h('div', { className: 'dsh-uc-reminder-row-name' }, row.name),
+                h('div', { className: 'dsh-uc-reminder-row-version' },
+                  h('span', { className: 'dsh-uc-mono' }, row.installed || '?'),
+                  h('span', { className: 'dsh-uc-version-arrow' }, '→'),
+                  h('span', { className: 'dsh-uc-mono dsh-uc-version-latest-brand' }, row.latest || '?'),
+                ),
+              ),
+              h('button', {
+                type: 'button',
+                className: 'dsh-uc-btn dsh-uc-btn-sm dsh-uc-row-update',
+                onClick: () => ask(row),
+              }, t('updateAction')),
+            )),
+          ),
+          h('div', { className: 'dsh-uc-reminder-panel-foot' },
+            h('button', {
+              type: 'button',
+              className: 'dsh-uc-btn dsh-uc-btn-secondary dsh-uc-btn-sm',
+              disabled: busy,
+              onClick: checkNow,
+            }, busy ? t('reminderChecking') : t('reminderCheck')),
+            h('button', {
+              type: 'button',
+              className: 'dsh-uc-btn dsh-uc-btn-ghost dsh-uc-btn-sm',
+              onClick: () => { void ignore('once'); },
+            }, t('reminderIgnoreOnce')),
+            h('button', {
+              type: 'button',
+              className: 'dsh-uc-btn dsh-uc-btn-ghost dsh-uc-btn-sm',
+              onClick: () => { void ignore('all'); },
+            }, t('reminderIgnoreAll')),
+          ),
+        ) : null,
+      );
+    }
+
     function Page(props) {
-      const { rpcCall, t } = props;
+      const { rpcCall, t, askAi, close } = props;
       const [running, setRunning] = useState(false);
       const [data, setData] = useState(null);
       const [loadingCache, setLoadingCache] = useState(true);
       const [error, setError] = useState('');
+      const [notice, setNotice] = useState('');
       const [filter, setFilter] = useState('all');
       const [sortMode, setSortMode] = useState('status');
       const [openNames, setOpenNames] = useState(() => new Set());
@@ -648,6 +992,17 @@ window.__ModuleLoader__.load({
           if (next.has(name)) next.delete(name); else next.add(name);
           return next;
         });
+      };
+
+      // Hand the update request to the AI instead of installing anything here:
+      // the plugin stays a checker, and the user keeps the send button.
+      const onAskAi = (row) => {
+        const text = t('askAiPrompt').replace('%s', row.name);
+        const outcome = askAi(text);
+        setNotice(outcome === 'draft' ? '' : outcome === 'clipboard' ? t('askAiCopied') : t('askAiNoSession'));
+        if (outcome !== 'none') {
+          try { close?.(); } catch { /* panel already gone */ }
+        }
       };
 
       const rows = data?.rows ?? [];
@@ -728,6 +1083,14 @@ window.__ModuleLoader__.load({
             onClick: run,
           }, t('retry')),
         ) : null,
+        notice ? h('div', { className: 'dsh-uc-banner', 'data-tone': 'notice' },
+          h('div', { className: 'dsh-uc-banner-text' }, h('span', null, notice)),
+          h('button', {
+            type: 'button',
+            className: 'dsh-uc-btn dsh-uc-btn-ghost dsh-uc-btn-sm',
+            onClick: () => setNotice(''),
+          }, '×'),
+        ) : null,
         loadingCache && !data && !running ? h(Skeleton) : null,
         neverChecked ? h('div', { className: 'dsh-uc-empty-card' },
           h('div', { className: 'dsh-uc-empty-icon' },
@@ -778,6 +1141,7 @@ window.__ModuleLoader__.load({
             t,
             open: openNames.has(row.name),
             onToggle: toggleOpen,
+            onAskAi,
           })),
         ) : null,
         data?.stats ? h('div', { className: 'dsh-uc-stats' },
@@ -785,6 +1149,7 @@ window.__ModuleLoader__.load({
             .replace('%d', String(data.stats.requests ?? 0))
             .replace('%d', String(data.stats.cacheHits ?? 0)),
         ) : null,
+        h(ReminderSettings, { rpcCall, t }),
       );
     }
 
@@ -1459,6 +1824,223 @@ window.__ModuleLoader__.load({
   font-variant-numeric: tabular-nums;
 }
 
+/* Row Action */
+.dsh-uc-row-update {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--dsw-radius-sm, 5px);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-link, #4176e6) 32%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-link, #4176e6) 8%, transparent);
+  color: var(--dsw-alias-link, #4176e6);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Settings Block */
+.dsh-uc-settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+}
+.dsh-uc-settings-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dsh-uc-settings-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, inherit);
+}
+.dsh-uc-settings-meta {
+  font-size: 11px;
+  color: var(--dsw-alias-label-caption, rgba(128,128,128,0.65));
+  font-variant-numeric: tabular-nums;
+}
+.dsh-uc-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary, inherit);
+}
+.dsh-uc-settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.dsh-uc-settings-hint {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary, rgba(128,128,128,0.85));
+}
+.dsh-uc-settings-error {
+  font-size: 11px;
+  color: var(--dsw-alias-state-error-primary, #e03131);
+}
+.dsh-uc-switch {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--dsw-alias-link, #4176e6);
+  cursor: pointer;
+}
+.dsh-uc-select {
+  flex: none;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--dsw-radius-sm, 5px);
+  border: 1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.35));
+  background: var(--dsw-alias-bg-layer-1, transparent);
+  color: var(--dsw-alias-label-primary, inherit);
+  font-family: inherit;
+  font-size: 12px;
+}
+.dsh-uc-select:disabled {
+  opacity: 0.5;
+}
+
+/* Footer Reminder */
+.dsh-uc-reminder {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex: none;
+}
+.dsh-uc-reminder-rail {
+  width: 36px;
+  justify-content: center;
+}
+.dsh-uc-reminder-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% + 4px);
+  height: 42px;
+  margin: 0 -2px;
+  padding: 0 10px 0 8px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, rgba(128,128,128,0.85));
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+  overflow: hidden;
+}
+.dsh-uc-reminder-rail .dsh-uc-reminder-btn {
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  justify-content: center;
+  border-radius: 10px;
+}
+.dsh-uc-reminder-btn:hover,
+.dsh-uc-reminder-btn[aria-expanded="true"] {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.12));
+  color: var(--dsw-alias-label-primary, inherit);
+}
+.dsh-uc-reminder-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dsh-uc-reminder-count {
+  margin-left: auto;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--dsw-alias-link, #4176e6);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.dsh-uc-reminder-panel {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  max-height: 60vh;
+  border-radius: 12px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3));
+  background: var(--dsw-alias-bg-layer-2, #fff);
+  box-shadow: var(--dsw-elevation-prominent, 0 8px 28px rgba(0,0,0,0.18));
+  overflow: hidden;
+}
+.dsh-uc-reminder-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: .5px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.25));
+}
+.dsh-uc-reminder-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, inherit);
+}
+.dsh-uc-reminder-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.dsh-uc-reminder-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1, rgba(128,128,128,0.05));
+}
+.dsh-uc-reminder-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.dsh-uc-reminder-row-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary, inherit);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-uc-reminder-row-version {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary, rgba(128,128,128,0.85));
+}
+.dsh-uc-reminder-panel-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: .5px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.25));
+}
+
 /* Focus Visible */
 .dsh-uc-btn:focus-visible,
 .dsh-uc-chip:focus-visible,
@@ -1526,15 +2108,29 @@ window.__ModuleLoader__.load({
           throw new Error(result?.error?.message || 'rpc failed');
         };
 
+        // Shared by the settings page and the footer panel: both hand the same
+        // update request to the composer.
+        const askAi = (text) => fillComposerDraft(ctx, text);
+
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: 'update-checker',
           order: 86,
           label: () => t('sectionLabel'),
-          inject: () => ({ rpcCall, t }),
+          inject: () => ({ rpcCall, t, askAi }),
         }, Page));
+
+        // One row above the settings group in the sidebar footer — the closest
+        // spot a plugin can reach to the host's own update indicator, since the
+        // settings trigger row itself exposes no slot.
+        ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+          name: 'sidebar.footer.action',
+          id: 'update-reminder',
+          locale: NS,
+          inject: () => ({ rpcCall, t, askAi }),
+        }, UpdateReminder));
       },
-      _internals: { parseMarkdownBody, parseInline },
+      _internals: { parseMarkdownBody, parseInline, fillComposerDraft },
     };
   },
 });

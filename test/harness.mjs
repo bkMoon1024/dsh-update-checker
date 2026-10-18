@@ -20,7 +20,7 @@ const CORDIS_URL = process.env.DSH_CORDIS_PATH
   || 'file:///D:/dsh%20work/_dsh_src/dsh/node_modules/@deepseek-ai/cordis/lib/index.js';
 const PLUGIN_URL = new URL('../index.js', import.meta.url).href;
 const PROFILE_DIR = process.env.DSH_PROFILE_DIR
-  || `C:/Users/${os.userInfo().username}/.dsh/profiles/desktop`;
+  || path.join(os.homedir(), '.dsh', 'profiles', 'desktop');
 
 // Isolated ~/.dsh home for the test: the scan still reads the real desktop
 // profile (live plugin set), but cache reads/writes must not touch the live

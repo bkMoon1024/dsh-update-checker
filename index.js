@@ -28,6 +28,19 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runCheck } from './lib/checker.js';
+import {
+  RETRY_BASE_MS,
+  START_DELAY_MS,
+  ignoreAllPending,
+  ignoreFingerprint,
+  nextDelayMs,
+  pendingFromResult,
+  readConfig,
+  readReminderState,
+  reminderPayload,
+  writeConfig,
+  writeReminderState,
+} from './lib/reminder.js';
 
 export const name = 'dsh-update-checker';
 
@@ -285,10 +298,130 @@ function mountWebRoute(ctx, { channel, handler }) {
   return cleanup;
 }
 
-/** Channel handler: check.run runs the scan, check.last returns the cached result. */
-async function handleRpc(ctx, endpoint, payload, signal) {
-  if (signal?.aborted) return fail('cancelled', 'The request was cancelled.');
+/**
+ * Run (or join) one scan for the active profile and fold its result into the
+ * reminder state. Shared by the RPC endpoint and the background scheduler so
+ * both paths keep the cached result, the persisted snapshot, and the pending
+ * update list in sync.
+ */
+async function ensureCheck(ctx) {
   const profileContext = ctx.profileContext;
+  if (!inFlightRun || inFlightRun.dir !== profileContext.dir) {
+    const promise = runCheck(profileContext.dir)
+      .then((result) => {
+        inFlightRun = null;
+        lastResult = result;
+        void persistLast(lastResultFiles(profileContext)[0], result);
+        return result;
+      }, (error) => {
+        inFlightRun = null;
+        throw error;
+      });
+    inFlightRun = { dir: profileContext.dir, promise };
+  }
+  const result = await inFlightRun.promise;
+  await recordReminderResult(ctx, result);
+  return result;
+}
+
+/** Persist what the latest scan means for the footer reminder. */
+async function recordReminderResult(ctx, result) {
+  try {
+    const profileContext = ctx.profileContext;
+    const state = await readReminderState(profileContext);
+    state.lastCheckAt = result.at;
+    state.lastError = null;
+    state.pending = pendingFromResult(result, state.ignored);
+    await writeReminderState(profileContext, state);
+  } catch (error) {
+    console.error(`dsh-update-checker: reminder state write failed: ${error?.message ?? error}`);
+  }
+}
+
+async function recordReminderFailure(ctx, error) {
+  try {
+    const profileContext = ctx.profileContext;
+    const state = await readReminderState(profileContext);
+    state.lastError = error instanceof Error ? error.message : String(error);
+    await writeReminderState(profileContext, state);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Background scan loop: one timer, re-armed after each attempt. A scan that
+ * throws backs off exponentially (capped at the configured interval) so a
+ * broken network or an exhausted GitHub quota is not hammered every minute.
+ */
+function startReminderScheduler(ctx) {
+  let timer = null;
+  let disposed = false;
+  let failures = 0;
+
+  const arm = async (delayMs) => {
+    if (disposed) return;
+    timer = setTimeout(() => { void tick(); }, delayMs);
+    // Do not keep the host process alive just for a reminder tick.
+    if (typeof timer.unref === 'function') timer.unref();
+  };
+
+  /**
+   * One scheduled attempt. Every context read happens inside this try: once
+   * the fiber is torn down, cordis throws on `ctx.<service>` ("cannot get
+   * required service ... in inactive context"), and an exception escaping a
+   * setTimeout callback is an unhandled rejection — the host treats that as a
+   * fatal load failure and exits.
+   */
+  const tick = async () => {
+    timer = null;
+    if (disposed) return;
+    let intervalMinutes;
+    try {
+      const config = await readConfig(ctx.profileContext);
+      intervalMinutes = config.intervalMinutes;
+      if (config.enabled) await ensureCheck(ctx);
+      failures = 0;
+    } catch (error) {
+      failures += 1;
+      await recordReminderFailure(ctx, error);
+    }
+    await arm(nextDelayMs({ failures, intervalMinutes }));
+  };
+
+  void arm(START_DELAY_MS);
+
+  return {
+    /** Re-arm after a config change so a new interval takes effect now. */
+    reschedule: async () => {
+      if (disposed) return;
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+      failures = 0;
+      let intervalMinutes;
+      try {
+        intervalMinutes = (await readConfig(ctx.profileContext)).intervalMinutes;
+      } catch {
+        /* torn-down fiber: the timer is going away with it */
+      }
+      await arm(nextDelayMs({ intervalMinutes }));
+    },
+    dispose: () => {
+      disposed = true;
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+    },
+  };
+}
+
+/** Channel handler: scans, cached results, and the footer reminder state. */
+async function handleRpc(ctx, internal, endpoint, payload, signal) {
+  if (signal?.aborted) return fail('cancelled', 'The request was cancelled.');
+  let profileContext;
+  try {
+    profileContext = ctx.profileContext;
+  } catch {
+    // The fiber was torn down (reload/HMR) while this request was in flight.
+    return fail('bad-request', 'dsh-update-checker is not active.');
+  }
   if (endpoint === 'check.run') {
     // Freshness window: a click within 90s of a completed scan reuses its
     // result instead of burning another ~15 upstream requests (the GitHub
@@ -302,21 +435,8 @@ async function handleRpc(ctx, endpoint, payload, signal) {
     ) {
       return ok(lastResult);
     }
-    if (!inFlightRun || inFlightRun.dir !== profileContext.dir) {
-      const promise = runCheck(profileContext.dir)
-        .then((result) => {
-          inFlightRun = null;
-          lastResult = result;
-          void persistLast(lastResultFiles(profileContext)[0], result);
-          return result;
-        }, (error) => {
-          inFlightRun = null;
-          throw error;
-        });
-      inFlightRun = { dir: profileContext.dir, promise };
-    }
     try {
-      return ok(await inFlightRun.promise);
+      return ok(await ensureCheck(ctx));
     } catch (error) {
       return fail('bad-request', error instanceof Error ? error.message : String(error));
     }
@@ -337,11 +457,37 @@ async function handleRpc(ctx, endpoint, payload, signal) {
     }
     return ok(null);
   }
+  if (endpoint === 'reminder.state') {
+    const [config, state] = await Promise.all([
+      readConfig(profileContext),
+      readReminderState(profileContext),
+    ]);
+    return ok(reminderPayload({ config, state, running: inFlightRun !== null }));
+  }
+  if (endpoint === 'config.set') {
+    const previous = await readConfig(profileContext);
+    const next = await writeConfig(profileContext, { ...previous, ...(payload ?? {}) });
+    void internal.scheduler?.reschedule?.();
+    return ok({ config: next });
+  }
+  if (endpoint === 'reminder.ignore') {
+    const mode = payload?.mode === 'all' ? 'all' : 'once';
+    const state = await readReminderState(profileContext);
+    const next = mode === 'all' ? ignoreAllPending(state) : ignoreFingerprint(state);
+    await writeReminderState(profileContext, next);
+    const config = await readConfig(profileContext);
+    return ok(reminderPayload({ config, state: next, running: inFlightRun !== null }));
+  }
   return fail('bad-request', `unknown endpoint ${JSON.stringify(endpoint)}`);
 }
 
 export function apply(ctx) {
-  const handler = (endpoint, payload, signal) => handleRpc(ctx, endpoint, payload, signal);
+  // Internal fiber state shared with the RPC handler. Kept off `ctx` on
+  // purpose: cordis 4 rejects `ctx.foo = value` for properties that were
+  // never declared via `ctx.provide()` ("cannot set property ... without
+  // provide"), and the scheduler is private to this plugin anyway.
+  const internal = { scheduler: null };
+  const handler = (endpoint, payload, signal) => handleRpc(ctx, internal, endpoint, payload, signal);
   const disposers = [];
   const routeCleanup = mountWebRoute(ctx, { channel: CHANNEL, handler });
   if (routeCleanup) {
@@ -351,6 +497,13 @@ export function apply(ctx) {
     const handleDispose = ctx.connection.rpc.handle(CHANNEL, handler);
     if (typeof handleDispose === 'function') disposers.push(handleDispose);
   }
+  // Register cleanup before arming the timer: if anything after this throws,
+  // the fiber must still take the timer down with it — a live timer on a
+  // torn-down fiber is exactly the crash this guard exists to prevent.
+  disposers.push(() => {
+    internal.scheduler?.dispose();
+    internal.scheduler = null;
+  });
   // cordis runs constructor-form plugins via `new apply(ctx, config)` and only
   // consults `instance[symbols.init]`; a returned disposer is silently dropped
   // (cordis lib/index.js execute: `return instance?.[symbols.init]?.()`), so
@@ -362,4 +515,5 @@ export function apply(ctx) {
       try { dispose(); } catch { /* already cleaned */ }
     }
   }, 'dsh-update-checker: remove web route');
+  internal.scheduler = startReminderScheduler(ctx);
 }

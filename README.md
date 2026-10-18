@@ -1,6 +1,6 @@
 # dsh-update-checker
 
-[![Version](https://img.shields.io/badge/version-0.3.2-blue)](https://github.com/daha1216/dsh-update-checker/commits/main)
+[![Version](https://img.shields.io/badge/version-0.3.3-blue)](https://github.com/daha1216/dsh-update-checker/commits/main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![DSH plugin](https://img.shields.io/badge/DSH-plugin-4A90D9)](https://github.com/topics/dsh-plugin)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](https://nodejs.org)
@@ -109,7 +109,7 @@ dsh plugin --profile desktop add "file:D:\path\to\dsh-update-checker"
 - `lib/checker.js` — 检查逻辑（纯函数 + 出站层，layer 可注入）
 - `client/client.js` — 设置页（module-loader factory 格式，手写 React.createElement）
 - `locale/` — 插件卡片显示文案
-- `npm test` — 离线测试全家桶：`test/checker.test.mjs`（纯函数 38 断言）+ `test/http.test.mjs`（出站层 19 例）+ `test/integration.test.mjs`（runCheck 集成 21 例，脚本化网络）+ `test/md.test.mjs`（markdown 23 例）+ `test/render-harness.mjs`（离线渲染冒烟）
+- `npm test` — 离线测试全家桶：`test/checker.test.mjs`（纯函数 38 断言）+ `test/http.test.mjs`（出站层 19 例）+ `test/integration.test.mjs`（runCheck 集成 21 例，脚本化网络）+ `test/md.test.mjs`（markdown 23 例）+ `test/render-harness.mjs`（离线渲染冒烟）+ `test/lifecycle.test.mjs`（真实 cordis 生命周期回归 5 例）
 - `npm run test:e2e` — 独立端到端：真实 cordis + mock webServer/connection + 真实 profile + 活网络（17 项断言；缓存读写走临时 home，不污染真实安装）
 
 无运行时依赖；peer 仅 `@deepseek-ai/cordis`。
@@ -117,6 +117,15 @@ dsh plugin --profile desktop add "file:D:\path\to\dsh-update-checker"
 注意：修改代码后重新 `install_bundle` 需先升 `package.json` 版本号（pnpm 按 name+version 缓存 file: 打包）。宿主端自 v0.2.2 起清理经 `ctx.effect` 正确接线，remove+install 热换已验证无需重启；设置页（client/client.js）改动需刷新一次 GUI 页面加载新脚本。
 
 ## 📝 更新日志
+
+### v0.3.3（2026-10-18）
+
+修复 v0.3.2 在 DSH 0.2.1-rc.2（cordis 4）上的宿主崩溃，并补上侧边栏页脚提醒。
+
+- **崩溃根因（两处叠加）**：① `apply()` 里 `ctx.reminderScheduler = scheduler` 是对未 `provide` 属性的赋值，cordis 4 直接抛 `cannot set property "reminderScheduler" without provide`，插件激活失败；② 定时器在抛错前已经排期，而清理函数注册在抛错点之后从未生效，于是这个「孤儿定时器」在纤维失效后仍会触发，`recordReminderFailure` 读取 `ctx.profileContext` 时抛错并从 `setTimeout` 回调逃逸——宿主把未处理的 rejection 当作致命加载失败，`exit 1`（2026-10-18 连续四次崩溃）。
+- **修复**：调度器改为闭包私有状态（不再挂到 `ctx`）；所有 `ctx.<service>` 读取移入 try；清理函数在启动定时器**之前**注册，保证任何后续抛错都会连带清掉定时器；RPC 处理入口对失效上下文返回 `bad-request` 而不是抛错。
+- **回归测试**：新增 `test/lifecycle.test.mjs`（真实 cordis，5 项断言），并纳入 `npm test`。把缺陷①还原后该测试立即失败，确认对真实崩溃点有牙齿。
+- **侧边栏页脚提醒**：设置页新增「定时检查」配置（启用开关 + 30/60/120/360 分钟间隔），页脚显示待更新数量与「立即检查 / 忽略本次 / 全部忽略」，更新动作交给 AI 处理（插件仍只检查、不安装）。
 
 ### v0.3.2（2026-10-18）
 
