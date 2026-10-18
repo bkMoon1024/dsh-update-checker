@@ -120,6 +120,19 @@ if (!pageText.includes('插件更新')) throw new Error('page header missing');
 if (!pageText.includes('更新')) throw new Error('page lost the update action label');
 if (/[ÃÂ�]/.test(pageText)) throw new Error('page text has mojibake');
 
+// Reminder controls lead the page: once the reminder state resolves, the
+// settings card renders before the plugin list. The seeds after Page's own
+// eight states feed ReminderSettings (state, saving, failed).
+const orderedText = seedStates([false, { at: new Date().toISOString(), rows: mockRows, stats: { requests: 3, cacheHits: 1 } }, false, '', '', 'all', 'status', new Set(),
+  { config: { enabled: true, intervalMinutes: 60 }, lastCheckAt: new Date().toISOString(), lastError: null }, false, false],
+  () => toText(createElement(Page, { rpcCall: rpc, t, askAi: pageInject.askAi })).join(' | '));
+const reminderIndex = orderedText.indexOf('后台提醒');
+const listIndex = orderedText.indexOf('dsh-update-checker');
+if (reminderIndex < 0) throw new Error('reminder settings card missing from page');
+if (listIndex < 0) throw new Error('plugin list missing from page');
+if (reminderIndex > listIndex) throw new Error('reminder settings must render before the plugin list');
+console.log('reminder before list:', reminderIndex, '<', listIndex);
+
 // --- Footer reminder entry -------------------------------------------------
 const footerInject = footer.meta.inject();
 console.log('footer inject keys:', Object.keys(footerInject).sort().join(','));
@@ -154,7 +167,7 @@ if (!collapsed.includes('1')) throw new Error('footer entry missing the pending 
 const panel = seedStates([pendingPayload, true, { left: 12, bottom: 80 }, false],
   () => toText(createElement(Reminder, { wide: true, ...footerInject })).join(' | '));
 console.log('footer panel:', JSON.stringify(panel));
-for (const expected of ['dsh-pocket', '2.10.7', '2.10.8', '忽略本次提醒', '全部忽略', '立即检查', '更新']) {
+for (const expected of ['dsh-pocket', '2.10.7', '2.10.8', '忽略本次提醒', '全部忽略', '立即检查', '让 AI 更新']) {
   if (!panel.includes(expected)) throw new Error('footer panel missing ' + expected);
 }
 
@@ -181,7 +194,7 @@ const fakeCtx = {
 };
 const outcome = internals.fillComposerDraft(fakeCtx, t('askAiPrompt').replace('%s', 'dsh-pocket'));
 if (outcome !== 'draft') throw new Error('expected draft outcome, got ' + outcome);
-if (drafted !== '帮我更新 dsh-pocket 插件即可') throw new Error('unexpected draft text: ' + drafted);
+if (drafted !== '帮我更新 dsh-pocket 插件') throw new Error('unexpected draft text: ' + drafted);
 console.log('composer prefill:', JSON.stringify(drafted));
 
 // The service is also reachable as ctx.uiSession when ctx.get is unavailable.
@@ -195,7 +208,7 @@ if (internals.fillComposerDraft(propertyCtx, 'x') !== 'draft' || draftedViaPrope
 
 // No session: falls back to the clipboard when available, otherwise reports none.
 Object.defineProperty(globalThis, 'navigator', { value: { language: 'zh-CN', clipboard: { writeText: async () => {} } }, configurable: true });
-const copied = internals.fillComposerDraft({ get: () => undefined }, '帮我更新 dsh-pocket 插件即可');
+const copied = internals.fillComposerDraft({ get: () => undefined }, '帮我更新 dsh-pocket 插件');
 if (copied !== 'clipboard') throw new Error('expected clipboard fallback, got ' + copied);
 Object.defineProperty(globalThis, 'navigator', { value: { language: 'zh-CN' }, configurable: true });
 const nothing = internals.fillComposerDraft({ get: () => undefined }, 'x');

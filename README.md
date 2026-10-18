@@ -1,6 +1,6 @@
 # dsh-update-checker
 
-[![Version](https://img.shields.io/badge/version-0.3.3-blue)](https://github.com/daha1216/dsh-update-checker/commits/main)
+[![Version](https://img.shields.io/badge/version-0.3.4-blue)](https://github.com/daha1216/dsh-update-checker/commits/main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![DSH plugin](https://img.shields.io/badge/DSH-plugin-4A90D9)](https://github.com/topics/dsh-plugin)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](https://nodejs.org)
@@ -117,6 +117,14 @@ dsh plugin --profile desktop add "file:D:\path\to\dsh-update-checker"
 注意：修改代码后重新 `install_bundle` 需先升 `package.json` 版本号（pnpm 按 name+version 缓存 file: 打包）。宿主端自 v0.2.2 起清理经 `ctx.effect` 正确接线，remove+install 热换已验证无需重启；设置页（client/client.js）改动需刷新一次 GUI 页面加载新脚本。
 
 ## 📝 更新日志
+
+### v0.3.4（2026-10-19）
+
+修好后台提醒的读回路径，并补齐它的测试。
+
+- **修复：持久化的待更新列表读回后丢失。** `normalizeState` 原先用扫描行断言（要求 `status === 'update'`）过滤待更新行，但落盘的 `compactRow` 本来就不带 `status`——于是每次从 `reminder-<profile>.json` 读回，待更新列表都被清空，页脚提醒在重启后或每次 `reminder.state` 刷新时消失。现改用独立的 `isPendingRow` 校验（只要求 `name`/`latest` 字符串），旧状态文件里带 `status` 的完整行也继续兼容。
+- **新增测试**：`test/reminder.test.mjs`（56 项断言：间隔夹取、失败退避、指纹与忽略语义、原子读写往返，含上述 bug 的回归用例）与 `test/reminder-scheduler.test.mjs`（25 项断言：真实 cordis 下的定时器激活、离线扫描、`reminder.state`/`reminder.ignore`/`config.set` 经 node:http 桥的端到端行为），均纳入 `npm test`。把修复还原后两条回归用例立即失败。
+- **设置页**：「后台提醒」卡片移到页面顶部（插件列表之前）；列表与提醒弹层的「更新」按钮改为「让 AI 更新」，填入输入框的指令为「帮我更新 <插件名> 插件」。
 
 ### v0.3.3（2026-10-18）
 

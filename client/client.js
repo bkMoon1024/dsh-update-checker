@@ -77,8 +77,8 @@ window.__ModuleLoader__.load({
         askAiHint: '在输入框填好更新指令，发送后由 AI 执行',
         askAiCopied: '已复制更新指令，粘贴到输入框发送即可',
         askAiNoSession: '当前没有打开的会话，请先新建会话',
-        updateAction: '更新',
-        askAiPrompt: '帮我更新 %s 插件即可',
+        updateAction: '让 AI 更新',
+        askAiPrompt: '帮我更新 %s 插件',
         reminderTitle: '有 %d 个插件可以更新',
         reminderEntry: '插件更新',
         reminderPending: '%d 个可更新',
@@ -152,7 +152,7 @@ window.__ModuleLoader__.load({
         askAiHint: 'Fills the composer with an update request for the AI to run',
         askAiCopied: 'Update request copied — paste it in the composer to send',
         askAiNoSession: 'No open session — start one first',
-        updateAction: 'Update',
+        updateAction: 'Ask AI to update',
         askAiPrompt: 'Please update the %s plugin',
         reminderTitle: '%d plugin updates available',
         reminderEntry: 'Plugin updates',
@@ -728,9 +728,9 @@ window.__ModuleLoader__.load({
     const INTERVAL_CHOICES = [30, 60, 120, 360];
 
     /**
-     * Background-reminder controls. Lives at the bottom of the settings page so
-     * the page still leads with the plugin list, which is what people open it
-     * for.
+     * Background-reminder controls. Leads the page, above the plugin list, so
+     * the one setting people come here to change is visible without scrolling
+     * past every installed plugin.
      */
     function ReminderSettings({ rpcCall, t }) {
       const [state, setState] = useState(null);
@@ -1072,6 +1072,7 @@ window.__ModuleLoader__.load({
             ) : (!loadingCache && !running ? h('div', { className: 'dsh-uc-header-meta' }, t('never')) : null),
           ),
         ),
+        h(ReminderSettings, { rpcCall, t }),
         error ? h('div', { className: 'dsh-uc-banner', 'data-tone': 'error' },
           h('div', { className: 'dsh-uc-banner-text' },
             h(IconWarning, { size: 16 }),
@@ -1149,7 +1150,6 @@ window.__ModuleLoader__.load({
             .replace('%d', String(data.stats.requests ?? 0))
             .replace('%d', String(data.stats.cacheHits ?? 0)),
         ) : null,
-        h(ReminderSettings, { rpcCall, t }),
       );
     }
 
