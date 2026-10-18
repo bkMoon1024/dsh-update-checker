@@ -68,6 +68,20 @@ let lastResult = null;
  */
 let inFlightRun = null;
 
+/**
+ * Read-modify-write cycles on the reminder state file are serialized. A
+ * background scan finishing at the same moment as an `ignore` click would
+ * otherwise write back the pre-ignore snapshot and resurrect a reminder the
+ * user just dismissed.
+ */
+let stateWriteQueue = Promise.resolve();
+
+function withStateLock(task) {
+  const run = stateWriteQueue.then(task, task);
+  stateWriteQueue = run.then(() => {}, () => {});
+  return run;
+}
+
 function ok(value) {
   return { ok: true, value };
 }
@@ -307,14 +321,17 @@ function mountWebRoute(ctx, { channel, handler }) {
 async function ensureCheck(ctx) {
   const profileContext = ctx.profileContext;
   if (!inFlightRun || inFlightRun.dir !== profileContext.dir) {
-    const promise = runCheck(profileContext.dir)
+    let promise;
+    promise = runCheck(profileContext.dir)
       .then((result) => {
-        inFlightRun = null;
+        // Only clear the marker when it still belongs to this scan: another
+        // profile on the same host may have replaced it meanwhile.
+        if (inFlightRun?.promise === promise) inFlightRun = null;
         lastResult = result;
         void persistLast(lastResultFiles(profileContext)[0], result);
         return result;
       }, (error) => {
-        inFlightRun = null;
+        if (inFlightRun?.promise === promise) inFlightRun = null;
         throw error;
       });
     inFlightRun = { dir: profileContext.dir, promise };
@@ -328,11 +345,13 @@ async function ensureCheck(ctx) {
 async function recordReminderResult(ctx, result) {
   try {
     const profileContext = ctx.profileContext;
-    const state = await readReminderState(profileContext);
-    state.lastCheckAt = result.at;
-    state.lastError = null;
-    state.pending = pendingFromResult(result, state.ignored);
-    await writeReminderState(profileContext, state);
+    await withStateLock(async () => {
+      const state = await readReminderState(profileContext);
+      state.lastCheckAt = result.at;
+      state.lastError = null;
+      state.pending = pendingFromResult(result, state.ignored);
+      await writeReminderState(profileContext, state);
+    });
   } catch (error) {
     console.error(`dsh-update-checker: reminder state write failed: ${error?.message ?? error}`);
   }
@@ -341,9 +360,11 @@ async function recordReminderResult(ctx, result) {
 async function recordReminderFailure(ctx, error) {
   try {
     const profileContext = ctx.profileContext;
-    const state = await readReminderState(profileContext);
-    state.lastError = error instanceof Error ? error.message : String(error);
-    await writeReminderState(profileContext, state);
+    await withStateLock(async () => {
+      const state = await readReminderState(profileContext);
+      state.lastError = error instanceof Error ? error.message : String(error);
+      await writeReminderState(profileContext, state);
+    });
   } catch {
     /* best-effort */
   }
@@ -353,14 +374,28 @@ async function recordReminderFailure(ctx, error) {
  * Background scan loop: one timer, re-armed after each attempt. A scan that
  * throws backs off exponentially (capped at the configured interval) so a
  * broken network or an exhausted GitHub quota is not hammered every minute.
+ *
+ * Dependencies are injectable so the timer state machine can be tested without
+ * a host or a network.
  */
-function startReminderScheduler(ctx) {
+export function startReminderScheduler(ctx, {
+  readConfig: readConfigImpl = readConfig,
+  scan = ensureCheck,
+  recordFailure = recordReminderFailure,
+  startDelayMs = START_DELAY_MS,
+} = {}) {
   let timer = null;
   let disposed = false;
+  let ticking = false;
+  let rescheduleRequested = false;
   let failures = 0;
 
-  const arm = async (delayMs) => {
+  const arm = (delayMs) => {
     if (disposed) return;
+    // Exactly one timer at a time: a reschedule racing a running tick may
+    // already have armed one, and two live timers would double the scan rate
+    // for the rest of the process lifetime.
+    if (timer !== null) { clearTimeout(timer); timer = null; }
     timer = setTimeout(() => { void tick(); }, delayMs);
     // Do not keep the host process alive just for a reminder tick.
     if (typeof timer.unref === 'function') timer.unref();
@@ -376,34 +411,52 @@ function startReminderScheduler(ctx) {
   const tick = async () => {
     timer = null;
     if (disposed) return;
+    ticking = true;
     let intervalMinutes;
     try {
-      const config = await readConfig(ctx.profileContext);
+      const config = await readConfigImpl(ctx.profileContext);
       intervalMinutes = config.intervalMinutes;
-      if (config.enabled) await ensureCheck(ctx);
+      if (config.enabled) await scan(ctx);
       failures = 0;
     } catch (error) {
       failures += 1;
-      await recordReminderFailure(ctx, error);
+      await recordFailure(ctx, error);
     }
-    await arm(nextDelayMs({ failures, intervalMinutes }));
+    ticking = false;
+    // A config change made while the scan was running must win over the
+    // interval this tick started with.
+    if (rescheduleRequested) {
+      rescheduleRequested = false;
+      try {
+        intervalMinutes = (await readConfigImpl(ctx.profileContext)).intervalMinutes;
+      } catch {
+        /* torn-down fiber: dispose() follows */
+      }
+    }
+    arm(nextDelayMs({ failures, intervalMinutes }));
   };
 
-  void arm(START_DELAY_MS);
+  arm(startDelayMs);
 
   return {
     /** Re-arm after a config change so a new interval takes effect now. */
     reschedule: async () => {
       if (disposed) return;
-      if (timer !== null) { clearTimeout(timer); timer = null; }
       failures = 0;
+      if (ticking) {
+        // The running tick re-reads the config and arms the new interval when
+        // it settles; arming here as well would leave two timers behind.
+        rescheduleRequested = true;
+        return;
+      }
+      if (timer !== null) { clearTimeout(timer); timer = null; }
       let intervalMinutes;
       try {
-        intervalMinutes = (await readConfig(ctx.profileContext)).intervalMinutes;
+        intervalMinutes = (await readConfigImpl(ctx.profileContext)).intervalMinutes;
       } catch {
         /* torn-down fiber: the timer is going away with it */
       }
-      await arm(nextDelayMs({ intervalMinutes }));
+      arm(nextDelayMs({ intervalMinutes }));
     },
     dispose: () => {
       disposed = true;
@@ -472,9 +525,12 @@ async function handleRpc(ctx, internal, endpoint, payload, signal) {
   }
   if (endpoint === 'reminder.ignore') {
     const mode = payload?.mode === 'all' ? 'all' : 'once';
-    const state = await readReminderState(profileContext);
-    const next = mode === 'all' ? ignoreAllPending(state) : ignoreFingerprint(state);
-    await writeReminderState(profileContext, next);
+    const next = await withStateLock(async () => {
+      const state = await readReminderState(profileContext);
+      const nextState = mode === 'all' ? ignoreAllPending(state) : ignoreFingerprint(state);
+      await writeReminderState(profileContext, nextState);
+      return nextState;
+    });
     const config = await readConfig(profileContext);
     return ok(reminderPayload({ config, state: next, running: inFlightRun !== null }));
   }
@@ -494,8 +550,15 @@ export function apply(ctx) {
     disposers.push(routeCleanup);
   } else {
     // Legacy/headless fallback: builds where connection still owns webServer.
-    const handleDispose = ctx.connection.rpc.handle(CHANNEL, handler);
-    if (typeof handleDispose === 'function') disposers.push(handleDispose);
+    // Some builds expose a connection without a usable rpc.handle (see the
+    // module header), and that path throws while touching owner.webServer —
+    // losing the RPC channel is bad, but crashing activation is worse.
+    try {
+      const handleDispose = ctx.connection.rpc.handle(CHANNEL, handler);
+      if (typeof handleDispose === 'function') disposers.push(handleDispose);
+    } catch (error) {
+      console.warn(`dsh-update-checker: no RPC channel available (${error?.message ?? error}); the reminder scheduler still runs`);
+    }
   }
   // Register cleanup before arming the timer: if anything after this throws,
   // the fiber must still take the timer down with it — a live timer on a

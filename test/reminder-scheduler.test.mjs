@@ -41,13 +41,24 @@ try {
 // Only the 30s boot delay is compressed; the hour-long intervals stay real so
 // the scheduler cannot spin during the test.
 const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
 const scheduledDelays = [];
+/** Timers armed through the wrapper and not yet fired/cleared. */
+const liveTimers = new Set();
 globalThis.setTimeout = (fn, ms, ...rest) => {
   if (typeof ms === 'number' && ms >= 1_000 && ms < 3_600_000) {
     scheduledDelays.push(ms);
-    return realSetTimeout(fn, 40, ...rest);
+    let handle = null;
+    const wrapped = (...args) => { liveTimers.delete(handle); fn(...args); };
+    handle = realSetTimeout(wrapped, 40, ...rest);
+    liveTimers.add(handle);
+    return handle;
   }
   return realSetTimeout(fn, ms, ...rest);
+};
+globalThis.clearTimeout = (handle) => {
+  liveTimers.delete(handle);
+  return realClearTimeout(handle);
 };
 
 const escaped = [];
@@ -206,6 +217,57 @@ try {
     scheduledDelays.includes(30 * 60_000),
     `delays=${JSON.stringify(scheduledDelays)}`,
   );
+
+  // --- Scenario C: a reschedule during an in-flight scan keeps one timer ---
+  await fiber.dispose();
+  fiber = null;
+  const { startReminderScheduler } = plugin;
+  let configChoice = { enabled: true, intervalMinutes: 30 };
+  let scanCount = 0;
+  let scanEntered;
+  const entered = new Promise((resolve) => { scanEntered = resolve; });
+  let releaseScan;
+  const slowScan = new Promise((resolve) => { releaseScan = resolve; });
+  const scheduler = startReminderScheduler({}, {
+    readConfig: async () => configChoice,
+    scan: async () => { scanCount += 1; scanEntered(); return slowScan; },
+    recordFailure: async () => {},
+  });
+  await Promise.race([entered, sleep(1000)]);
+  check('scenario C: the first tick entered the scan', scanCount === 1, `scans=${scanCount}`);
+  configChoice = { enabled: true, intervalMinutes: 45 };
+  await scheduler.reschedule();
+  check('scenario C: a reschedule during a tick arms no second timer', liveTimers.size === 0, `live=${liveTimers.size}`);
+  releaseScan({ at: new Date().toISOString(), profileDir: PROFILE_DIR, rows: [] });
+  await sleep(10);
+  check('scenario C: exactly one timer survives the tick', liveTimers.size === 1, `live=${liveTimers.size}`);
+  check('scenario C: the interval changed mid-scan wins', scheduledDelays.at(-1) === 45 * 60_000, `last=${scheduledDelays.at(-1)}`);
+  scheduler.dispose();
+  check('scenario C: dispose clears the timer', liveTimers.size === 0, `live=${liveTimers.size}`);
+
+  // --- Scenario D: a build whose connection.rpc.handle throws must not crash
+  const ctx2 = new Context();
+  ctx2.provide('webServer', {});
+  ctx2.provide('connection', { rpc: { handle() { throw new Error('cannot get property "webServer" without inject'); } } });
+  const provider2 = await ctx2.plugin({
+    name: 'test-profile-context-2',
+    apply(providerCtx) {
+      providerCtx.provide('profileContext', profileContext);
+    },
+  });
+  let bareFiber = null;
+  let bareFailure = null;
+  try {
+    bareFiber = await ctx2.plugin(plugin);
+  } catch (error) {
+    bareFailure = error;
+  }
+  check('scenario D: a throwing rpc.handle fallback does not fail activation', bareFailure === null, String(bareFailure?.message ?? ''));
+  check('scenario D: the scheduler still arms its first tick', liveTimers.size === 1, `live=${liveTimers.size}`);
+  try { await bareFiber?.dispose(); } catch { /* already torn down */ }
+  try { await provider2.dispose(); } catch { /* already torn down */ }
+  try { await ctx2.dispose(); } catch { /* already torn down */ }
+  check('scenario D: teardown clears the timer', liveTimers.size === 0, `live=${liveTimers.size}`);
 
   check('no rejection escaped the scheduler', escaped.length === 0, escaped.map((error) => String(error?.message ?? error)).join('; '));
 } finally {

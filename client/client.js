@@ -104,6 +104,7 @@ window.__ModuleLoader__.load({
         every1h: '每小时',
         every2h: '每 2 小时',
         every6h: '每 6 小时',
+        everyCustom: '每 %d 分钟',
       },
       en: {
         sectionLabel: 'Plugin Updates',
@@ -179,6 +180,7 @@ window.__ModuleLoader__.load({
         every1h: 'Hourly',
         every2h: 'Every 2 hours',
         every6h: 'Every 6 hours',
+        everyCustom: 'Every %d min',
       },
     };
 
@@ -760,6 +762,11 @@ window.__ModuleLoader__.load({
 
       if (!state?.config) return null;
       const config = state.config;
+      // config.json may hold an interval written outside the presets (hand
+      // edit, older build); show it instead of silently selecting 30 min.
+      const intervalOptions = INTERVAL_CHOICES.includes(config.intervalMinutes)
+        ? INTERVAL_CHOICES
+        : [...INTERVAL_CHOICES, config.intervalMinutes].sort((a, b) => a - b);
       return h('div', { className: 'dsh-uc-card dsh-uc-settings-card' },
         h('div', { className: 'dsh-uc-settings-head' },
           h('div', { className: 'dsh-uc-settings-title' }, t('reminderSection')),
@@ -788,8 +795,8 @@ window.__ModuleLoader__.load({
             value: String(config.intervalMinutes),
             disabled: saving || !config.enabled,
             onChange: (event) => { void save({ intervalMinutes: Number(event.target.value) }); },
-          }, INTERVAL_CHOICES.map((minutes) => h('option', { key: minutes, value: String(minutes) },
-            t(INTERVAL_LABEL_KEY[minutes])))),
+          }, intervalOptions.map((minutes) => h('option', { key: minutes, value: String(minutes) },
+            INTERVAL_LABEL_KEY[minutes] ? t(INTERVAL_LABEL_KEY[minutes]) : t('everyCustom').replace('%d', String(minutes))))),
         ),
         state.lastError ? h('div', { className: 'dsh-uc-settings-error' },
           `${t('reminderError')}: ${state.lastError}`) : null,

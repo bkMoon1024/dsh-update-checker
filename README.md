@@ -1,6 +1,6 @@
 # dsh-update-checker
 
-[![Version](https://img.shields.io/badge/version-0.3.4-blue)](https://github.com/daha1216/dsh-update-checker/commits/main)
+[![Version](https://img.shields.io/badge/version-0.3.5-blue)](https://github.com/daha1216/dsh-update-checker/commits/main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![DSH plugin](https://img.shields.io/badge/DSH-plugin-4A90D9)](https://github.com/topics/dsh-plugin)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](https://nodejs.org)
@@ -109,7 +109,7 @@ dsh plugin --profile desktop add "file:D:\path\to\dsh-update-checker"
 - `lib/checker.js` — 检查逻辑（纯函数 + 出站层，layer 可注入）
 - `client/client.js` — 设置页（module-loader factory 格式，手写 React.createElement）
 - `locale/` — 插件卡片显示文案
-- `npm test` — 离线测试全家桶：`test/checker.test.mjs`（纯函数 38 断言）+ `test/http.test.mjs`（出站层 19 例）+ `test/integration.test.mjs`（runCheck 集成 21 例，脚本化网络）+ `test/md.test.mjs`（markdown 23 例）+ `test/render-harness.mjs`（离线渲染冒烟）+ `test/lifecycle.test.mjs`（真实 cordis 生命周期回归 5 例）
+- `npm test` — 离线测试全家桶：`test/checker.test.mjs`（纯函数 38 断言）+ `test/http.test.mjs`（出站层 19 例）+ `test/integration.test.mjs`（runCheck 集成 21 例，脚本化网络）+ `test/md.test.mjs`（markdown 23 例）+ `test/render-harness.mjs`（离线渲染冒烟）+ `test/lifecycle.test.mjs`（真实 cordis 生命周期回归 5 例）+ `test/reminder.test.mjs`（提醒状态纯函数与文件往返 56 断言）+ `test/reminder-scheduler.test.mjs`（真实 cordis 调度器/RPC 端到端 33 例）
 - `npm run test:e2e` — 独立端到端：真实 cordis + mock webServer/connection + 真实 profile + 活网络（17 项断言；缓存读写走临时 home，不污染真实安装）
 
 无运行时依赖；peer 仅 `@deepseek-ai/cordis`。
@@ -117,6 +117,17 @@ dsh plugin --profile desktop add "file:D:\path\to\dsh-update-checker"
 注意：修改代码后重新 `install_bundle` 需先升 `package.json` 版本号（pnpm 按 name+version 缓存 file: 打包）。宿主端自 v0.2.2 起清理经 `ctx.effect` 正确接线，remove+install 热换已验证无需重启；设置页（client/client.js）改动需刷新一次 GUI 页面加载新脚本。
 
 ## 📝 更新日志
+
+### v0.3.5（2026-10-19）
+
+运行逻辑与兼容性收尾（性能/兼容/体验复核后的小修）。
+
+- **修复：改间隔可能留下两个定时器。** 若 `config.set` 的 `reschedule` 恰好落在一次扫描执行中（扫描通常 1–3 秒，用户在设置页改间隔时很可能撞上），旧代码在 tick 进行中又排了一个定时器，tick 结束时再排一个，此后每轮扫描都双份触发。现在 `arm` 保证任意时刻只有一个定时器，tick 期间收到的重排请求改为标记，由 tick 收尾时重新读配置并按新间隔排期——改间隔立即生效，不再等下一轮。
+- **修复：扫描与「忽略」并发时忽略可能被覆盖。** `recordReminderResult` 与 `reminder.ignore` 都是「读状态 → 改 → 写」，同时发生会互相覆盖；现在状态写入经进程内串行队列（`withStateLock`）。
+- **修复：扫描结束清理 in-flight 标记会误删别的 profile 的标记。** 多 profile 宿主下改为只在标记仍属于本次扫描时清除。
+- **兼容：`connection.rpc.handle` 回退路径不再可能拖垮激活。** 旧版/无 `webServer.register` 的构建里，该回退自身会抛 `cannot get property "webServer" without inject`（见文件头注释）；现在捕获并降级为无 RPC 通道，定时提醒照常运行。
+- **体验：非预设间隔不再显示成 30 分钟。** `config.json` 里若被手工写入 45 这类不在预设里的间隔，设置页会追加「每 45 分钟」选项并正确选中。
+- **测试**：`test/reminder-scheduler.test.mjs` 增补场景 C（tick 进行中重排：旧代码留下 2 个定时器，修复后恒为 1；且新间隔立即生效）与场景 D（回退路径抛错不导致激活失败），现为 33 项断言；把调度器修复还原后场景 C 的 4 项断言立即失败。
 
 ### v0.3.4（2026-10-19）
 
