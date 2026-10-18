@@ -1,6 +1,6 @@
 {
   "name": "dsh-update-checker",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "One-click check which installed DSH plugins have upstream updates (check only, never installs), with release notes.",
   "license": "MIT",

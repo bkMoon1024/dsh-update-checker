@@ -1,6 +1,6 @@
 # dsh-update-checker
 
-[![Version](https://img.shields.io/badge/version-0.3.1-blue)](https://github.com/daha1216/dsh-update-checker/commits/main)
+[![Version](https://img.shields.io/badge/version-0.3.2-blue)](https://github.com/daha1216/dsh-update-checker/commits/main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![DSH plugin](https://img.shields.io/badge/DSH-plugin-4A90D9)](https://github.com/topics/dsh-plugin)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](https://nodejs.org)
@@ -117,6 +117,15 @@ dsh plugin --profile desktop add "file:D:\path\to\dsh-update-checker"
 注意：修改代码后重新 `install_bundle` 需先升 `package.json` 版本号（pnpm 按 name+version 缓存 file: 打包）。宿主端自 v0.2.2 起清理经 `ctx.effect` 正确接线，remove+install 热换已验证无需重启；设置页（client/client.js）改动需刷新一次 GUI 页面加载新脚本。
 
 ## 📝 更新日志
+
+### v0.3.2（2026-10-18）
+
+深色模式视觉修复。此前设置页在 DSH 深色主题下多处不可读、按钮与图标失形，根因是几个令牌语义用错、还有几个令牌在 DSH 里根本不存在。
+
+- **主按钮前景与底色**：`.dsh-uc-btn-primary` 原用 `--dsw-alias-brand-primary` 配 `color:#ffffff`。该令牌是宿主单色主按钮的底色（深色下为近白 `#f9fafb`），于是变成白底白字。改用宿主自己的配对 `--dsw-alias-button-primary-fill` + `--dsw-alias-label-primary-foreground`；hover 由 `filter: brightness(1.06)` 改为 `--dsw-alias-button-primary-hover`。
+- **强调色**：14 处 `--dsw-alias-brand-primary` 统一改为 `--dsw-alias-link`（浅色 `#4176e6` / 深色 `#7aaaff`），覆盖状态色、筛选 chip 选中态、徽章、待更新卡片边框、图标底、版本号与链接、焦点轮廓。
+- **失效令牌**：7 处 `--dsh-code-font-family` 在 DSH 中从未定义（浏览器会静默丢弃该声明），改为 `--ds-font-family-code`。
+- **阴影**：展开卡片与主按钮的硬编码 `rgba(0,0,0,…)` 阴影改为 `--dsw-shadow-lv1` / `--dsw-shadow-lv2`，跟随主题明暗。
 
 ### v0.3.1（2026-10-18）
 
