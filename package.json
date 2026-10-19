@@ -2,7 +2,7 @@
   "name": "dsh-update-checker",
   "version": "0.3.5",
   "type": "module",
-  "description": "One-click check which installed DSH plugins have upstream updates (check only, never installs), with release notes.",
+  "description": "One-click & background update checker for DeepSeek Harness third-party plugins: upstream detection, changelog diffs, sidebar reminders, and safe AI-assisted updates.",
   "license": "MIT",
   "author": "daha1216",
   "repository": {
@@ -21,7 +21,8 @@
     "client",
     "locale/*.json",
     "cordis.patch.yml",
-    "icon.svg"
+    "icon.svg",
+    "assets"
   ],
   "icon": "./icon.svg",
   "engines": {

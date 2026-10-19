@@ -1,186 +1,233 @@
-# dsh-update-checker
+<div align="center">
 
-[![Version](https://img.shields.io/badge/version-0.3.5-blue)](https://github.com/daha1216/dsh-update-checker/commits/main)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
-[![DSH plugin](https://img.shields.io/badge/DSH-plugin-4A90D9)](https://github.com/topics/dsh-plugin)
-[![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](https://nodejs.org)
+# 🔔 dsh-update-checker · 插件更新巡检器
 
-DSH 插件：在设置的「插件更新」页一键检查本机已安装的第三方插件是否有上游更新，并展示当前版本到最新版本之间的 Release 更新内容。
+**DeepSeek Harness 第三方插件一键与后台智能巡检：上游探测、Release 变更深度解析、侧边栏角标提醒与一键「让 AI 更新」**
 
-**只做检查，不负责安装或更新。**
+[![Release](https://img.shields.io/github/v/release/daha1216/dsh-update-checker?color=4d6bfe.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](./LICENSE)
+[![DSH plugin](https://img.shields.io/badge/DSH-plugin-4A90D9.svg?style=flat-square)](https://github.com/topics/dsh-plugin)
+[![Tests Passing](https://img.shields.io/badge/tests-190%2B%20passed-brightgreen.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker)
+[![Node >=22](https://img.shields.io/badge/node-%E2%89%A522-339933.svg?style=flat-square)](https://nodejs.org)
 
-## ✨ 功能
+**中文** · [English](./README.en.md)
 
-- **一键扫描**：读取当前 profile 的依赖，逐个查询上游最新版本；npm 包、GitHub 仓库、本地 `file:` 安装都支持。
-- **状态筛选**：`全部 / 有更新 / 已是最新 / 本地 / 需关注` 五个 chips，兼作统计摘要，点击即过滤。
-- **更新内容**：展示「当前版本 → 最新版本」之间的所有 Release 条目，markdown 渲染（标题/列表/引用/代码/粗体/链接），默认折叠、展开才解析。
-- **本地领先可辨**：本地版本高于上游时显示「本地领先上游」，不再与「本地一致」混淆。
-- **缓存与配额友好**：TTL 缓存 + ETag 条件请求，GitHub 304 不消耗匿名配额；支持 `GITHUB_TOKEN` 提升限额。
-- **请求统计**：页面底部显示本次扫描的请求数、缓存命中数等。
-- **可访问性**：折叠行是真正的展开按钮（`aria-expanded` / `aria-controls` / `aria-label`，键盘可操作）。
+</div>
 
-## 🧭 状态含义
+---
 
-| 状态 | 含义 |
-|---|---|
-| 有更新 `update` | 上游存在比当前安装版本更新的稳定版，可展开查看更新内容。 |
-| 本地落后 `local-behind` | 本地安装（`file:`）声明的版本低于上游最新版。 |
-| 本地领先 `local-ahead` | 本地版本高于上游最新版（例如本地开发中、或上游回退过版本）。 |
-| 已是最新 `local-latest` | 与上游最新稳定版一致。 |
-| 跟踪分支 `branch` | 安装的是分支或 commit（如 `#main`、commit sha），没有可比较的版本号。 |
-| 无法比较 `unknown` | 引用形式无法解析出版本（如非标准 tag）。 |
-| 本地安装 `local` | 本地安装且未声明上游仓库，无参考版本。 |
-| 检查失败 `error` | 查询上游时出错（网络/限流等），行内给出原因。 |
+随着 DeepSeek Harness（DSH）生态的蓬勃发展，上下文压缩、技能管理、会话时光机等各类第三方插件极大地拓展了智能体的能力边界。然而在日常使用中：
+- 关键安全漏洞已修复、重要特性已发布，你却对上游新版本浑然不知？
+- 每次都要手动在 npm、GitHub Releases 与本地开发目录之间逐个比对版本，繁琐且费时？
+- 市面上的更新工具要么容易暗中破坏本地依赖环境，要么动辄消耗大量网络配额？
 
-## 🔍 工作方式
+**dsh-update-checker** 是专为 DeepSeek Harness 打造的**原生级「插件更新巡检器」**。它坚守 **「纯净只读巡检 · 绝不越权修改」** 的安全铁律，不仅提供一键全景扫描与详尽的 Release 变更对比，更支持低开销的**后台定时自动巡检**与**侧边栏轻量角标提醒**。发现新版本时，轻轻一点即可将更新指令交由 AI 智能体在受控环境下安全完成。
 
-- 宿主端读取当前 profile 的 `package.json`，找出第三方依赖（跳过 `@deepseek-ai/*` 官方内置包）。
-- 按安装来源分类检查：
-  - **npm 版本号**（`^1.2.3`、`0.1.6` 等）：查询 npm registry（npmjs → npmmirror 依次回退）的 `dist-tags.latest`。
-  - **GitHub 引用**（`github:owner/repo#tag`）：查询 GitHub Releases 最新版本；`#tag` 缺省时仅展示最新 Release 供参考；分支/commit 引用判为「跟踪分支」。
-  - **本地安装**（`file:...`）：标记为本地开发安装；若包声明了 GitHub 仓库，附带展示上游最新版本作参考（本地版本与上游一致 / 落后 / 领先分别标注）。
-- 更新内容来自 GitHub Releases（当前版本到最新版本之间的所有条目）。GitHub API 不可达时回退 jsDelivr 的 tag 列表（只有版本号，无正文）；GitHub API 匿名限额 60 次/小时/IP，可在宿主环境设置 `GITHUB_TOKEN`（或 `GH_TOKEN`）提升限额——插件会自动以 Bearer 头发送，未设置时保持匿名。
-- 客户端设置页通过 Connection RPC 通道（`/dsh-update-checker`）调用宿主端。宿主端把该通道以 `kind:'prefix'` 路由挂到自身 inject 的 `webServer` 上，逐分支复刻官方 `/api` 传输协议（client-request → server-response 信封），并用 `connection.requestRejection` 做请求栅栏（旧版回退 loopback 校验）。不使用 `ctx.connection.rpc.handle`：当前 dsh 桌面构建中该方法内部访问 `owner.webServer` 会抛 `cannot get property "webServer" without inject`（dsh-pocket lib/web-rpc.js 记录了同一回归），仅作为无 webServer 的 headless 环境兜底。
-- **网络访问范围**：仅 `registry.npmjs.org`、`registry.npmmirror.com`、`api.github.com`、`data.jsdelivr.com`；不访问其他主机，不收集遥测。
+---
 
-## ⚡ 性能与健壮性设计（v0.3.0 重构）
+## 📸 实机体验
 
-- **统一出站层 `lib/http.js`**：所有 registry/CDN/GitHub 请求走同一层，提供四件套——
-  - **全局限流**：并发上限 6，N 个插件 × M 个端点不会同时开 N×M 个连接；
-  - **单飞合并**：同 URL 并发请求共享一次网络调用（两个插件指同一仓库只花一次 releases 查询）；
-  - **TTL 缓存 + ETag 条件请求**：响应 5 分钟内直接走内存；过期但有 ETag 的条目发 `If-None-Match` 再验证，**GitHub 304 不消耗匿名配额**——重复扫描从「每次 15+ 请求」降到「几乎零成本」；
-  - **主机熔断**：GitHub 403/429 后按 `x-ratelimit-reset` 短路该主机（默认 60s），后续行直接走 jsDelivr 回退，不再浪费注定失败的请求。
-- **npm dist-tags 快路径**：先用 ~200B 的 `/-/package/<name>/dist-tags` 判定「已是最新」（最常见情形一个微请求收工）；只有真过期的包才拉 abbreviated packument（billion-context 这类活跃包的 packument 是 MB 级，过去每次扫描都要白拉）。
-- **预发布双保险**：发行说明与「最新稳定版」判定同时看 GitHub prerelease 标记和标签形态（`-rc`/`-beta`），作者忘勾标记也不会把 rc 当稳定版。
-- 单请求超时 8s，用 REF'd 定时器实现（`AbortSignal.timeout` 的定时器不保活事件循环，裸环境永不触发——库代码不能依赖宿主恰好有其他活动）；最坏离线链条 ≈40s，不会挂死。
-- 失败的 URL 不缓存（每次扫描重试），成功的 URL 进 TTL 缓存；缓存条目带 etag 的过期后条件再验证。
-- 并发 check.run 服务端去重为一次扫描，保护 registry 配额；被共享的扫描不挂调用方 signal（一个客户端离开不会杀掉其他人的结果）。
-- 单条 release 正文上限 64K 字符，防止上游病态 changelog 撑爆响应与 DOM。
-- 结果持久化原子写（tmp + rename），崩溃不会留下半截缓存文件；缓存按 profile 分离：`~/.dsh/dsh-update-checker/last-<profile>.json`（兼容读取 ≤0.2.0 的旧平铺文件，但仅在文件内记录的 `profileDir` 与当前 profile 一致时才采用）；内存缓存命中与文件回退都校验 profileDir，多 profile 宿主不串台。
-- 客户端分组/过滤/排序全部 `useMemo` 化，展开单行不再触发全列表重算。
-- 更新内容默认折叠，仅展开的行渲染正文（首次展开后才解析 markdown）；每次扫描的请求统计附在结果 `stats` 字段（requests/cacheHits/coalesced/revalidations/notModified），并在页面底部显示本次请求数与缓存命中数。
+<div align="center">
 
-## 🎛 设置页 UI
+| 侧边栏常驻提醒浮层（后台智能巡检） | 设置中心「插件更新」全景管理面板 |
+| :---: | :---: |
+| <img src="./assets/reminder-popup.png" width="450" alt="侧边栏角标与待更新浮层气泡" /> | <img src="./assets/settings-panel.png" width="470" alt="设置中心插件更新全景面板" /> |
+| *后台定时巡检静默运行，发现新版本时在侧边栏底部展示数量角标，点击唤起交互气泡，支持一键「让 AI 更新」与版本忽略* | *一键全景扫描，按状态即时筛选（全部/有更新/最新/本地），可视化配置巡检频率，直观浏览 Release 变更日志* |
 
-- **状态筛选 chips**：`全部 / 有更新 / 已是最新 / 本地 / 需关注`，兼作统计摘要；点击过滤，仅显示有内容的分组。
-- **默认按状态排序**（有更新 → 本地落后 → 异常 → 无法比较 → 最新/本地一致/本地领先 → 跟踪分支 → 本地安装，同级按名称），可一键切换"按名称"。
-- **发行说明 markdown 渲染**：标题/有序无序列表/引用/分隔线/代码围栏/粗体/行内代码/链接（图片降级为链接）。纯字符串→AST→React 元素，全程无 innerHTML；解析器有独立测试（`node test/md.test.mjs`，23 例）。
-- **完整状态反馈**：缓存读取骨架屏、从未检查过的居中 CTA、错误横幅带"重试"、缓存超过 24h 提示"建议重新检查"、相对时间（悬停显示绝对时间）。
-- **展开状态提升到页面级**：重新检查后已展开的行保持展开；"展开全部/收起全部"（可展开行 ≥2 时出现）。
-- **待更新卡片左侧品牌色竖条**一眼可辨；卡片头部整行可点击展开（带旋转箭头）；计数为 0 时不再显示 `(0)`。
-- **页面统计**：底部一行显示本次扫描的请求数 / 缓存命中数。
-- 检查中按钮内置旋转 spinner（keyframes 由插件注入，fiber 卸载时清理）。
+</div>
 
-## 📦 安装
+---
 
-```sh
-# 桌面版
+## ✨ 核心特性
+
+### 1. 🔍 一键全景扫描与多源状态精准识别
+- **全依赖自动穿透**：智能解析当前 Profile 的 `package.json`，自动区分第三方扩展，自动跳过官方内置的基础包（`@deepseek-ai/*`）。
+- **全源格式兼容**：
+  - **npm 版本依赖**（`^1.2.3`、`~0.1.6`、精确版本）：优先查询 npm 官方镜像源，并支持 npmmirror 智能回退。
+  - **GitHub 远程引用**（`github:owner/repo#tag`）：精准比对 GitHub Releases 最新稳定版本；分支或 Commit 引用自动判为「跟踪分支」。
+  - **本地开发安装**（`file:` / `link:`）：若项目声明了 GitHub 仓库，自动比对本地与上游差异，清晰标明「本地领先」、「本地落后」或「与上游一致」。
+- **状态细分与统计筛选**：提供 `全部`、`有更新`、`已是最新`、`本地`、`需关注` 等状态过滤 Chips，并支持一键按状态或名称排序。
+
+### 2. 🔔 智能后台调度巡检与侧边栏实时气泡
+- **灵活的后台巡检机制**：支持在设置中心自定义巡检频率（每 30 分钟 / 1 小时 / 2 小时 / 6 小时或自定义分钟数）。
+- **非侵入式轻量提醒**：发现新版本后，仅在左下角侧边栏底部显示低调的待更新数量角标（如 `↑ 插件更新 2`），绝不弹窗打扰当前对话与编码心流。
+- **丰富的气泡操作**：
+  - **版本迁移直观对比**：清晰展示每个待更新插件的 `当前安装版本 → 最新稳定版本`。
+  - **忽略本次提醒**：本次暂不提醒，待检测到更高版本或手动点击检查时重新触发。
+  - **全部忽略**：将当前所有待更新插件标记为已阅，跳过当前版本的持续提醒。
+  - **状态持久化防丢失**：即便重启 DSH 桌面端或重载宿主，忽略列表与待更新状态完整保留。
+
+### 3. 🤖 无缝联动智能体：「让 AI 更新」
+- **坚守只读安全底线**：插件自身**绝不静默运行任何安装脚本、绝不修改 `node_modules` 与配置文件**。
+- **一键智能委托**：在气泡弹窗或插件列表点击「让 AI 更新」，插件会自动在当前会话输入框填入标准化提示词（例如 `帮我更新 billion-context 插件`）。未聚焦或无会话时自动回退为剪贴板复制，由 DSH 智能体遵循该插件的官方规范完成环境备份、版本更新与重启验证。
+
+### 4. 📖 深度 Release 变更日志解析（Changelog Diff）
+- **区间化更新呈现**：自动抓取并聚合「当前安装版本 → 最新版本」之间的所有 Release 发行记录，不漏掉任何中间修复。
+- **纯原生 Markdown 渲染**：内置自主实现的高性能轻量 Markdown AST 解析器（涵盖多级标题、列表、代码围栏、引用块、粗体与链接等）。
+- **零 XSS 隐患**：纯字符串到 AST 再到安全 React 节点，全程不使用 `innerHTML`。
+- **按需惰性渲染**：默认保持折叠，展开单行时才解析渲染正文，即便长达数万字的更新日志也能瞬间展开，丝滑流畅。
+
+### 5. ⚡ 工业级统一出站网络层与零配额浪费
+- **单飞并发合并（Single-Flight Coalescing）**：同一时刻对相同 URL 的并发探测合并为单一网络请求（如多个插件引用同一上游仓库时共享一次请求）。
+- **TTL 内存缓存 + ETag 条件请求（304 Not Modified）**：
+  - 响应结果在 5 分钟内直接由内存返回；
+  - 缓存过期后自动附带 `If-None-Match` 发起条件验证，**GitHub 304 响应完全不消耗匿名 API 配额**（60次/小时/IP）！
+- **支持高额 API Token**：在宿主环境配置 `GITHUB_TOKEN` 或 `GH_TOKEN`，自动以 Bearer 头鉴权，配额提升至 5,000 次/小时。
+- **全局并发限流与熔断保护**：出站并发上限严格控制为 6；若遭遇上游 403/429 限流，自动按 `x-ratelimit-reset` 进入静默冷却，并平滑降级至 jsDelivr CDN 保证可用性。
+- **npm dist-tags 极速路径**：优先请求仅 ~200B 的轻量级 `dist-tags`，绝大多数已是最新版的插件一击即中，省去下载 MB 级完整 packument 的巨额带宽与时间。
+
+### 6. 🛡️ 架构稳定性与原生设计融合
+- **严格遵循 Cordis 4 生命周期**：清理逻辑全部通过 `ctx.effect` 挂载；调度器状态使用闭包隔离，杜绝向 `ctx` 挂载私有属性导致宿主崩溃的风险。
+- **原子化落盘与 Profile 隔离**：状态写入采用临时文件（tmp）+ 重命名（rename）的原子操作；缓存按 Profile 严格分离存储，多 Profile 环境下绝不串台。
+- **进程内串行写锁（withStateLock）**：彻底解决后台巡检落盘与用户前端操作（如点击忽略）之间的并发竞态问题。
+- **深度融合 DSH Design Tokens**：经历 v0.3.2 配色全量重构，深色模式下按钮文字、高亮链接、卡片阴影与边框完全对齐官方无障碍标准。
+
+---
+
+## 🧭 状态含义一览
+
+| 状态标识 | 界面展示 | 详细含义 |
+|---|---|---|
+| `update` | **有更新** | 上游存在比当前安装版本更新的正式稳定版，可展开查看多版本 Release 日志。 |
+| `local-behind` | **本地 · 上游有新版** | 本地开发安装（`file:` / `link:`）声明的版本低于上游最新版。 |
+| `local-ahead` | **本地 · 领先上游** | 本地安装版本高于上游最新正式版（处于前沿开发中或上游发生版本回滚）。 |
+| `local-latest` | **本地 · 与上游一致** | 本地安装版本与上游最新正式版完全吻合。 |
+| `latest` | **已是最新** | npm 安装版本与上游最新稳定版一致。 |
+| `branch` | **跟踪分支** | 安装来源为分支或特定 Commit（如 `#main`、commit sha），不适用 SemVer 比较。 |
+| `unknown` | **无法比较** | 引用形式无法识别出标准版本号（如非标准 tag）。 |
+| `local` | **本地安装** | 本地安装且未声明上游 GitHub 仓库，无参考基准。 |
+| `error` | **检查失败** | 查询上游失败（网络超时、域名无法解析或触发限流等），卡片内展示具体原因。 |
+
+---
+
+## 📦 安装与配置
+
+> **前置要求**：已安装 DeepSeek Harness 且 Node.js 版本 ≥ 22。
+
+### 方式一：推荐通过 Profile 安装（GitHub 远程源）
+
+在终端中执行以下命令（以桌面版 Profile 为例）：
+
+```bash
+# 桌面版安装
 dsh plugin --profile desktop add github:daha1216/dsh-update-checker
 
-# Web 部署
+# Web 独立服务部署安装
 dsh plugin --profile web add github:daha1216/dsh-update-checker
 ```
 
-装完**重启 DSH**（宿主端加载新插件），再刷新一次页面（设置页脚本）。
+> 💡 **重要说明**：
+> 1. 安装完成后，**请完全退出并重新启动 DSH 桌面端**（使宿主模块加载生效），然后**刷新一次 GUI 页面**（加载设置页脚本）。
+> 2. 后续若要更新巡检器自身，重新运行上述相同的 `add` 命令即可。
 
-开发态可直接从本地目录安装：
+### 方式二：本地开发安装（Checkout 模式）
 
-```sh
-dsh plugin --profile desktop add "file:D:\path\to\dsh-update-checker"
+如果你希望在本地克隆并进行调试修改：
+
+```bash
+git clone https://github.com/daha1216/dsh-update-checker.git "D:/dsh work/dsh-update-checker"
+dsh plugin --profile desktop add "file:D:/dsh work/dsh-update-checker"
 ```
 
-## 🔑 配置
+---
 
-| 环境变量 | 作用 |
+## 🔑 环境变量与限额优化
+
+| 环境变量 | 作用说明 |
 |---|---|
-| `GITHUB_TOKEN` / `GH_TOKEN` | 以 Bearer 头发给 GitHub API，匿名 60 次/小时 → 认证 5000 次/小时。未设置时保持匿名。 |
+| `GITHUB_TOKEN` / `GH_TOKEN` | 用于以 Bearer 格式鉴权 GitHub API。未设置时保持匿名模式（60 次/小时/IP）；设置后配额提升至 **5,000 次/小时**。 |
 
-## ⚠️ 兼容性说明
+---
 
-- pnpm 会在 profile 里报 `missing peer @deepseek-ai/cordis` 等警告：宿主在运行时从应用内提供这些包、不装入 profile node_modules，所有第三方插件（pocket/retrace/watcher 等）同样如此，属预期噪音。
-- 需要 Node ≥22（fetch/AbortSignal.any/timeout）。
-- 未来 dsh 若恢复 rpc.handle 可用，本插件的主路径（自有 webServer 路由）不受影响。
-- **清理必须走 `ctx.effect`，不能靠 apply 的返回值**（≤0.2.1 的教训）：cordis 对 constructor 形态插件执行 `new apply(ctx, config)`，构造器返回的对象会被丢弃（execute 只认 `instance[symbols.init]?.()`，见 cordis lib/index.js:1066-1071），返回的 disposer 从未注册 → 纤维 dispose 时 webServer 路由残留 → 下次 HMR 重装报 `webserver: duplicate prefix route`。v0.2.2 起与 dsh-pocket（lib/index.js:401-404）一致：`ctx.effect(() => disposer)` 注册全部清理；harness 有「dispose 移除路由 + 重载干净注册」回归测试。若活宿主已残留旧版孤儿路由，重启 DSH 一次即清。
+## 🏗️ 项目架构与技术细节
 
-## 🛠 开发
+```
+dsh-update-checker/
+├── index.js          # Cordis 宿主插件核心：路由注册、RPC 通信、后台定时巡检调度器、生命周期管理
+├── lib/
+│   ├── http.js       # 统一出站网络层：单飞并发合并、TTL 缓存、ETag 304 条件复用、主机熔断与降级
+│   ├── checker.js    # 纯函数检查逻辑：package.json 解析、多源版本探查、Release 聚合对比
+│   ├── reminder.js   # 提醒状态管理：指纹计算、忽略策略、多 Profile 原子化落盘与并发串行写锁
+│   └── md.js         # 零依赖轻量 Markdown 解析器：安全 AST 构建与 React 元素映射
+├── client/
+│   └── client.js     # 客户端设置中心与侧边栏渲染面板：双语国际化、UI 状态机、交互反馈
+├── locale/           # 插件元信息多语言配置（zh.json / en.json）
+├── assets/           # 实机界面展示资源
+└── test/             # 详尽的自动化测试套件
+```
 
-- `index.js` — 宿主端 Cordis 插件（webServer 路由 + RPC 信封 + 请求栅栏）
-- `lib/http.js` — 统一出站层（限流 / 单飞 / TTL+ETag 缓存 / 主机熔断，fetch 可注入）
-- `lib/checker.js` — 检查逻辑（纯函数 + 出站层，layer 可注入）
-- `client/client.js` — 设置页（module-loader factory 格式，手写 React.createElement）
-- `locale/` — 插件卡片显示文案
-- `npm test` — 离线测试全家桶：`test/checker.test.mjs`（纯函数 38 断言）+ `test/http.test.mjs`（出站层 19 例）+ `test/integration.test.mjs`（runCheck 集成 21 例，脚本化网络）+ `test/md.test.mjs`（markdown 23 例）+ `test/render-harness.mjs`（离线渲染冒烟）+ `test/lifecycle.test.mjs`（真实 cordis 生命周期回归 5 例）+ `test/reminder.test.mjs`（提醒状态纯函数与文件往返 56 断言）+ `test/reminder-scheduler.test.mjs`（真实 cordis 调度器/RPC 端到端 33 例）
-- `npm run test:e2e` — 独立端到端：真实 cordis + mock webServer/connection + 真实 profile + 活网络（17 项断言；缓存读写走临时 home，不污染真实安装）
+### 1. 通信机制与安全栅栏
+- 客户端设置页与侧边栏浮层通过 Connection RPC 通道（`/dsh-update-checker`）与宿主端通信。
+- 宿主端将通道以 `kind: 'prefix'` 路由挂载至受信任的 `webServer` 上，逐分支遵循官方 `/api` 传输规范，并使用严格的同源与 Loopback 校验作为请求安全防护栏。
 
-无运行时依赖；peer 仅 `@deepseek-ai/cordis`。
+### 2. 调度器容错与并发保证
+- 调度器完全闭包化，杜绝属性逃逸污染。定时器在纤维失效前即被 `ctx.effect` 严格清理。
+- 运行中修改检查频率支持即时重排，任意时刻保证全局仅有一个活跃的巡检定时器。
+- 扫描结果落盘与用户前台点击「忽略」通过 `withStateLock` 排队处理，杜绝数据覆写。
 
-注意：修改代码后重新 `install_bundle` 需先升 `package.json` 版本号（pnpm 按 name+version 缓存 file: 打包）。宿主端自 v0.2.2 起清理经 `ctx.effect` 正确接线，remove+install 热换已验证无需重启；设置页（client/client.js）改动需刷新一次 GUI 页面加载新脚本。
+---
+
+## 🧪 自动化测试
+
+项目遵循严格的测试驱动开发规范，内置 8 个独立测试套件、覆盖 **190+ 项断言**，涵盖纯函数、出站层、端到端集成与宿主生命周期验证：
+
+```bash
+# 运行离线全量单元测试
+npm test
+
+# 运行真实环境端到端测试（临时隔离环境）
+npm run test:e2e
+```
+
+测试矩阵包含：
+- `test/checker.test.mjs`：38 项断言，覆盖版本提取、来源判定与状态流转；
+- `test/http.test.mjs`：19 项测试，覆盖 TTL 缓存、单飞合并、ETag 304 条件复用与熔断降级；
+- `test/integration.test.mjs`：21 项测试，脚本化网络模拟下的复杂检查流；
+- `test/md.test.mjs`：23 项测试，深度校验 Markdown 语法解析保真度；
+- `test/render-harness.mjs`：客户端设置页与浮层气泡离线渲染冒烟测试；
+- `test/lifecycle.test.mjs`：真实 Cordis 4 环境下插件加载、卸载与资源释放测试；
+- `test/reminder.test.mjs`：56 项断言，后台提醒状态机、忽略语义与原子读写校验；
+- `test/reminder-scheduler.test.mjs`：33 项断言，调度器防重排竞态与 RPC 降级回归测试。
+
+---
 
 ## 📝 更新日志
 
 ### v0.3.5（2026-10-19）
-
-运行逻辑与兼容性收尾（性能/兼容/体验复核后的小修）。
-
-- **修复：改间隔可能留下两个定时器。** 若 `config.set` 的 `reschedule` 恰好落在一次扫描执行中（扫描通常 1–3 秒，用户在设置页改间隔时很可能撞上），旧代码在 tick 进行中又排了一个定时器，tick 结束时再排一个，此后每轮扫描都双份触发。现在 `arm` 保证任意时刻只有一个定时器，tick 期间收到的重排请求改为标记，由 tick 收尾时重新读配置并按新间隔排期——改间隔立即生效，不再等下一轮。
-- **修复：扫描与「忽略」并发时忽略可能被覆盖。** `recordReminderResult` 与 `reminder.ignore` 都是「读状态 → 改 → 写」，同时发生会互相覆盖；现在状态写入经进程内串行队列（`withStateLock`）。
-- **修复：扫描结束清理 in-flight 标记会误删别的 profile 的标记。** 多 profile 宿主下改为只在标记仍属于本次扫描时清除。
-- **兼容：`connection.rpc.handle` 回退路径不再可能拖垮激活。** 旧版/无 `webServer.register` 的构建里，该回退自身会抛 `cannot get property "webServer" without inject`（见文件头注释）；现在捕获并降级为无 RPC 通道，定时提醒照常运行。
-- **体验：非预设间隔不再显示成 30 分钟。** `config.json` 里若被手工写入 45 这类不在预设里的间隔，设置页会追加「每 45 分钟」选项并正确选中。
-- **测试**：`test/reminder-scheduler.test.mjs` 增补场景 C（tick 进行中重排：旧代码留下 2 个定时器，修复后恒为 1；且新间隔立即生效）与场景 D（回退路径抛错不导致激活失败），现为 33 项断言；把调度器修复还原后场景 C 的 4 项断言立即失败。
+- **修复巡检重排竞态**：解决在扫描执行期间修改间隔可能遗留两个定时器的问题。重排请求统一由收尾时处理，保证任意时刻仅有一个定时器，新间隔即刻生效。
+- **引入状态写串行锁（withStateLock）**：将后台扫描结果记录与用户前台「忽略」操作纳入队列，彻底避免状态并发覆盖。
+- **RPC 回退路径增强**：`connection.rpc.handle` 回退路径在无 webServer 环境下优雅降级，防止激活失败。
+- **自定义间隔智能适配**：手动写入非预设检查间隔时，设置面板自动动态添加对应项并正确选中。
+- **测试矩阵增补**：增补调度器重排与容错回归断言，总断言数增至 33 项。
 
 ### v0.3.4（2026-10-19）
-
-修好后台提醒的读回路径，并补齐它的测试。
-
-- **修复：持久化的待更新列表读回后丢失。** `normalizeState` 原先用扫描行断言（要求 `status === 'update'`）过滤待更新行，但落盘的 `compactRow` 本来就不带 `status`——于是每次从 `reminder-<profile>.json` 读回，待更新列表都被清空，页脚提醒在重启后或每次 `reminder.state` 刷新时消失。现改用独立的 `isPendingRow` 校验（只要求 `name`/`latest` 字符串），旧状态文件里带 `status` 的完整行也继续兼容。
-- **新增测试**：`test/reminder.test.mjs`（56 项断言：间隔夹取、失败退避、指纹与忽略语义、原子读写往返，含上述 bug 的回归用例）与 `test/reminder-scheduler.test.mjs`（25 项断言：真实 cordis 下的定时器激活、离线扫描、`reminder.state`/`reminder.ignore`/`config.set` 经 node:http 桥的端到端行为），均纳入 `npm test`。把修复还原后两条回归用例立即失败。
-- **设置页**：「后台提醒」卡片移到页面顶部（插件列表之前）；列表与提醒弹层的「更新」按钮改为「让 AI 更新」，填入输入框的指令为「帮我更新 <插件名> 插件」。
+- **修复待更新状态持久化读回丢失**：重构状态反序列化校验逻辑，解决从 `reminder-<profile>.json` 读回时待更新列表被清空的偶发问题。
+- **一键「让 AI 更新」体验落地**：卡片与浮窗按钮升级为「让 AI 更新」，点击后自动向会话输入框填入标准化提示词。
+- **UI 布局优化**：将「后台提醒」卡片提升至设置页顶部，配置更直观。
 
 ### v0.3.3（2026-10-18）
-
-修复 v0.3.2 在 DSH 0.2.1-rc.2（cordis 4）上的宿主崩溃，并补上侧边栏页脚提醒。
-
-- **崩溃根因（两处叠加）**：① `apply()` 里 `ctx.reminderScheduler = scheduler` 是对未 `provide` 属性的赋值，cordis 4 直接抛 `cannot set property "reminderScheduler" without provide`，插件激活失败；② 定时器在抛错前已经排期，而清理函数注册在抛错点之后从未生效，于是这个「孤儿定时器」在纤维失效后仍会触发，`recordReminderFailure` 读取 `ctx.profileContext` 时抛错并从 `setTimeout` 回调逃逸——宿主把未处理的 rejection 当作致命加载失败，`exit 1`（2026-10-18 连续四次崩溃）。
-- **修复**：调度器改为闭包私有状态（不再挂到 `ctx`）；所有 `ctx.<service>` 读取移入 try；清理函数在启动定时器**之前**注册，保证任何后续抛错都会连带清掉定时器；RPC 处理入口对失效上下文返回 `bad-request` 而不是抛错。
-- **回归测试**：新增 `test/lifecycle.test.mjs`（真实 cordis，5 项断言），并纳入 `npm test`。把缺陷①还原后该测试立即失败，确认对真实崩溃点有牙齿。
-- **侧边栏页脚提醒**：设置页新增「定时检查」配置（启用开关 + 30/60/120/360 分钟间隔），页脚显示待更新数量与「立即检查 / 忽略本次 / 全部忽略」，更新动作交给 AI 处理（插件仍只检查、不安装）。
+- **Cordis 4 架构深度重构**：修复 DSH 0.2.1-rc.2 宿主上的崩溃问题；调度器状态收敛为闭包私有；清理函数移至定时器启动前注册。
+- **正式引入侧边栏浮层提醒**：实现设置中心定时轮询配置、侧边栏底部待更新角标与交互气泡浮窗。
 
 ### v0.3.2（2026-10-18）
-
-深色模式视觉修复。此前设置页在 DSH 深色主题下多处不可读、按钮与图标失形，根因是几个令牌语义用错、还有几个令牌在 DSH 里根本不存在。
-
-- **主按钮前景与底色**：`.dsh-uc-btn-primary` 原用 `--dsw-alias-brand-primary` 配 `color:#ffffff`。该令牌是宿主单色主按钮的底色（深色下为近白 `#f9fafb`），于是变成白底白字。改用宿主自己的配对 `--dsw-alias-button-primary-fill` + `--dsw-alias-label-primary-foreground`；hover 由 `filter: brightness(1.06)` 改为 `--dsw-alias-button-primary-hover`。
-- **强调色**：14 处 `--dsw-alias-brand-primary` 统一改为 `--dsw-alias-link`（浅色 `#4176e6` / 深色 `#7aaaff`），覆盖状态色、筛选 chip 选中态、徽章、待更新卡片边框、图标底、版本号与链接、焦点轮廓。
-- **失效令牌**：7 处 `--dsh-code-font-family` 在 DSH 中从未定义（浏览器会静默丢弃该声明），改为 `--ds-font-family-code`。
-- **阴影**：展开卡片与主按钮的硬编码 `rgba(0,0,0,…)` 阴影改为 `--dsw-shadow-lv1` / `--dsw-shadow-lv2`，跟随主题明暗。
+- **深色模式全量重构**：全面对齐 DSH 官方 Design Tokens（`--dsw-alias-button-primary-fill`、`--dsw-alias-link`、`--ds-font-family-code`），彻底解决深色模式下白底白字与按钮糊团问题。
 
 ### v0.3.1（2026-10-18）
-
-- **缓存按 profile 隔离**：`check.last` 的文件回退现在校验文件内 `profileDir` 与当前 profile 一致，多 profile 宿主不再串台。
-- **本地领先上游**：新增 `local-ahead` 状态，本地版本高于上游时显示「本地领先上游」，不再与「本地一致」混淆；本地安装行同样区分一致/落后/领先。
-- **非 semver 引用判分支**：GitHub 插件安装的是分支或 commit（如 `#main`、commit sha）时判为「跟踪分支」，不再永久挂「无法比较」。
-- **更新内容区间修正**：`releasesAfterTag` 改用版本比较确定停止点，上游 tag 无 `v` 前缀时也不会混入更旧版本的 release。
-- **GitHub 配额**：支持 `GITHUB_TOKEN` / `GH_TOKEN`（Bearer 头），未设置时保持匿名。
-- **可访问性与渲染**：折叠行改为真正的展开按钮（`aria-expanded`/`aria-controls`/`aria-label`，键盘可操作）；更新正文首次展开才解析渲染；无正文的 release 行不再显示空折叠区。
-- **页面统计**：结果页底部显示本次扫描的请求数与缓存命中数。
-- **样式作用域**：`prefers-reduced-motion` 规则收窄到插件页面，不再影响整个 DSH UI。
-- **排序统一**：宿主与客户端使用同一状态排序表。
-- 测试：离线 101 断言 + 渲染冒烟；E2E 17 项（缓存读写改用临时 home，不污染真实安装）。
+- **Profile 隔离与状态增强**：缓存文件按 Profile 隔离；新增 `local-ahead`（本地领先上游）状态；修复 Release 过滤区间；支持 `GITHUB_TOKEN` 高额鉴权。
 
 ### v0.3.0（2026-10-17）
+- **统一出站网络层重构**：引入限流、单飞合并、TTL + ETag 缓存、主机熔断与 npm dist-tags 极速路径。
 
-- 完整重构：统一出站层（限流/单飞/TTL+ETag 缓存/主机熔断）、npm dist-tags 快路径、预发布双保险、原子持久化、useMemo 化；新增 http/integration 测试（离线 58 例 + E2E 17 例全绿）。
+---
 
-### v0.2.3
+## 📄 开源协议
 
-- 首次开源：设置页「插件更新」页、按安装来源分类检查、Release 更新内容展示、jsDelivr 回退、markdown 渲染。
+本项目基于 [MIT License](./LICENSE) 协议开源。
 
-## 📄 License
+## 🔗 相关项目
 
-MIT © [daha1216](https://github.com/daha1216)
-
-## 🔗 相关
-
-- 收录于 [dsh-plugin-collection](https://github.com/daha1216/dsh-plugin-collection)（DSH 第三方插件精选目录）。
-- 同作者的插件：[dsh-retrace](https://github.com/daha1216/dsh-retrace)、[dsh-watcher](https://github.com/daha1216/dsh-watcher)、[dsh-skills-manager](https://github.com/daha1216/dsh-skills-manager)。
+- 收录于 [dsh-plugin-collection](https://github.com/daha1216/dsh-plugin-collection)（DSH 精选第三方插件索引）。
+- 欢迎探索同作者的其他 DSH 实用工具：
+  - [dsh-retrace](https://github.com/daha1216/dsh-retrace) — 会话时光机：消息撤回、原地编辑重发与产物版本化回退。
+  - [dsh-skills-manager](https://github.com/daha1216/dsh-skills-manager) — 本地技能可视化管理面板：一站式配置模型与用户调用策略。
+  - [dsh-watcher](https://github.com/daha1216/dsh-watcher) — 跨会话环境变更监控器。
