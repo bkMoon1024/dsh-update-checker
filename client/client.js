@@ -358,12 +358,25 @@ window.__ModuleLoader__.load({
       return blocks;
     }
 
+    // Release notes and repo/page URLs come from arbitrary upstream
+    // repositories — untrusted input. Only http(s) may become an anchor:
+    // `javascript:` and friends render as plain text (React does not
+    // sanitize URL schemes for us).
+    const SAFE_HREF_RE = /^https?:\/\//i;
+    function safeHref(href) {
+      return typeof href === 'string' && SAFE_HREF_RE.test(href) ? href : '';
+    }
+
     function renderInlineNodes(nodes, keyBase) {
       return nodes.map((node, index) => {
         const key = `${keyBase}-${index}`;
         if (node.t === 'b') return h('strong', { key, style: { fontWeight: 600, color: 'var(--dsw-alias-label-primary, inherit)' } }, node.text);
         if (node.t === 'c') return h('code', { key, className: 'dsh-uc-md-code' }, node.text);
-        if (node.t === 'a') return h('a', { key, href: node.href, target: '_blank', rel: 'noreferrer', className: 'dsh-uc-link-strong' }, node.text);
+        if (node.t === 'a') {
+          const href = safeHref(node.href);
+          if (href) return h('a', { key, href, target: '_blank', rel: 'noreferrer', className: 'dsh-uc-link-strong' }, node.text);
+          return h('span', { key }, node.text);
+        }
         return h('span', { key }, node.text);
       });
     }
@@ -592,8 +605,8 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-uc-release-head' },
             h('span', { className: 'dsh-uc-release-tag' }, release.tag),
             release.date ? h('span', { className: 'dsh-uc-release-date' }, formatDate(release.date)) : null,
-            release.url ? h('a', {
-              href: release.url,
+            safeHref(release.url) ? h('a', {
+              href: safeHref(release.url),
               target: '_blank',
               rel: 'noreferrer',
               className: 'dsh-uc-link-strong dsh-uc-release-link',
@@ -646,7 +659,7 @@ window.__ModuleLoader__.load({
       // rows the user never expands.
       const [everOpen, setEverOpen] = useState(open);
       useEffect(() => { if (open) setEverOpen(true); }, [open]);
-      const linkUrl = row.repoUrl || row.pageUrl || row.homepage || '';
+      const linkUrl = safeHref(row.repoUrl || row.pageUrl || row.homepage || '');
       const sourceLabel = row.kind === 'npm' ? 'npm' : row.kind === 'github' ? 'GitHub' : row.kind === 'file' ? t('localPath') : (row.kind || 'link');
       const tone = STATUS_TONE[row.status] ?? 'neutral';
       const isUpdate = row.status === 'update';
@@ -2137,7 +2150,7 @@ window.__ModuleLoader__.load({
           inject: () => ({ rpcCall, t, askAi }),
         }, UpdateReminder));
       },
-      _internals: { parseMarkdownBody, parseInline, fillComposerDraft },
+      _internals: { parseMarkdownBody, parseInline, fillComposerDraft, safeHref },
     };
   },
 });

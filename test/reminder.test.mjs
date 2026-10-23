@@ -70,7 +70,16 @@ eq(
   'fingerprint is sorted',
 );
 eq(
-  pendingFromResult({ rows: [row(), row({ name: 'x', status: 'latest' })] }, {}),
+  pendingFromResult({
+    rows: [
+      row(),
+      row({ name: 'local-tool', status: 'local-behind', installed: '0.3.0', latest: 'v0.3.2', kind: 'file', spec: 'file:D:/tools/local-tool', pageUrl: '' }),
+      row({ name: 'x', status: 'latest' }),
+      row({ name: 'y', status: 'local-ahead' }),
+      row({ name: 'z', status: 'local-latest' }),
+      row({ name: 'w', status: 'local' }),
+    ],
+  }, {}),
   [{
     name: 'dsh-pocket',
     installed: '2.10.7',
@@ -79,11 +88,24 @@ eq(
     spec: '^2.10.7',
     repoUrl: 'https://github.com/daha1216/dsh-pocket',
     pageUrl: 'https://www.npmjs.com/package/dsh-pocket',
+  }, {
+    name: 'local-tool',
+    installed: '0.3.0',
+    latest: 'v0.3.2',
+    kind: 'file',
+    spec: 'file:D:/tools/local-tool',
+    repoUrl: 'https://github.com/daha1216/dsh-pocket',
+    pageUrl: '',
   }],
-  'pending keeps update rows only and compacts them',
+  'pending keeps update and local-behind rows, compacts them, drops the rest',
 );
 eq(pendingFromResult({ rows: [row()] }, { 'dsh-pocket': '2.10.8' }), [], 'ignored version filtered');
 eq(pendingFromResult({ rows: [row()] }, { 'dsh-pocket': '2.10.7' }).length, 1, 'ignored older version kept');
+eq(
+  pendingFromResult({ rows: [row({ name: 'local-tool', status: 'local-behind', latest: 'v0.3.2' })] }, { 'local-tool': 'v0.3.2' }),
+  [],
+  'ignored local-behind version filtered like update rows',
+);
 
 // --- normalizeState: persisted pending rows survive the read-back ---------
 const compactPending = pendingFromResult({ rows: [row()] }, {});

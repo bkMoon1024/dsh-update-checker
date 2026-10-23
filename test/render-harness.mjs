@@ -214,3 +214,43 @@ Object.defineProperty(globalThis, 'navigator', { value: { language: 'zh-CN' }, c
 const nothing = internals.fillComposerDraft({ get: () => undefined }, 'x');
 if (nothing !== 'none') throw new Error('expected none outcome, got ' + nothing);
 console.log('prefill fallbacks: clipboard + none ok');
+
+// --- Link scheme whitelist (untrusted release notes / repo URLs) -----------
+// safeHref unit checks.
+if (typeof internals.safeHref !== 'function') throw new Error('safeHref is not exported for testing');
+if (internals.safeHref('https://example.com/x') !== 'https://example.com/x') throw new Error('safeHref dropped an https URL');
+if (internals.safeHref('http://example.com') !== 'http://example.com') throw new Error('safeHref dropped an http URL');
+if (internals.safeHref('javascript:alert(1)') !== '') throw new Error('safeHref passed a javascript: URL');
+if (internals.safeHref('data:text/html,x') !== '') throw new Error('safeHref passed a data: URL');
+if (internals.safeHref('HTTPS://example.com') !== 'HTTPS://example.com') throw new Error('safeHref should accept scheme case-insensitively');
+if (internals.safeHref(42) !== '') throw new Error('safeHref must reject non-strings');
+console.log('safeHref: http(s)-only allowlist ok');
+
+// Tree-level check: a release body carrying javascript:/data: markdown links
+// must render them as plain text — no anchor may carry a non-http(s) href.
+function collectHrefs(node, out = []) {
+  if (node == null || node === true || node === false) return out;
+  if (Array.isArray(node)) { for (const n of node) collectHrefs(n, out); return out; }
+  if (typeof node === 'object' && node.type) {
+    if (node.type === 'a' && typeof node.props?.href === 'string') out.push(node.props.href);
+    if (typeof node.type === 'function') { collectHrefs(node.type(node.props), out); return out; }
+    collectHrefs(node.children, out);
+  }
+  return out;
+}
+const evilRows = [
+  { name: 'evil-pkg', status: 'update', installed: '1.0.0', latest: '1.0.1', spec: '^1', description: '', error: null, kind: 'github', repoUrl: '', pageUrl: '', homepage: 'javascript:alert(document.cookie)', releasesSource: 'api',
+    releases: [{ tag: 'v1.0.1', date: '', url: 'https://github.com/a/b/releases/v1.0.1', body: '[点我](javascript:alert(1)) [正常](https://example.com/ok) [带尾巴](https://example.com/tail).' }] },
+  { name: 'evil-release-url', status: 'update', installed: '1.0.0', latest: '1.0.2', spec: '^1', description: '', error: null, kind: 'github', repoUrl: '', pageUrl: '', homepage: '', releasesSource: 'api',
+    releases: [{ tag: 'v1.0.2', date: '', url: 'javascript:alert(2)', body: 'text' }] },
+];
+const evilSeeds = [false, { at: new Date().toISOString(), rows: evilRows, stats: { requests: 2, cacheHits: 0 } }, false, '', '', 'all', 'status', new Set(evilRows.map((r) => r.name))];
+const hrefs = seedStates(evilSeeds, () => collectHrefs(createElement(Page, { rpcCall: rpc, t, askAi: pageInject.askAi })));
+const evilFlat = seedStates(evilSeeds, () => toText(createElement(Page, { rpcCall: rpc, t, askAi: pageInject.askAi })).join(' '));
+const unsafe = hrefs.filter((href) => !/^https?:\/\//i.test(href));
+if (unsafe.length > 0) throw new Error('rendered non-http(s) anchor hrefs: ' + JSON.stringify(unsafe));
+if (!hrefs.includes('https://example.com/ok')) throw new Error('legitimate markdown link was dropped');
+if (!hrefs.includes('https://github.com/a/b/releases/v1.0.1')) throw new Error('legitimate release url was dropped');
+if (!evilFlat.includes('点我')) throw new Error('javascript: link text should survive as plain text');
+if (!evilFlat.includes('正常')) throw new Error('https link label missing from rendered text');
+console.log('link whitelist:', hrefs.length, 'anchor hrefs, all http(s)');
