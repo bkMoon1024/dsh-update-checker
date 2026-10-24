@@ -69,6 +69,19 @@ const routes = new Map([
   ['https://api.github.com/repos/me/ghbranch/releases?per_page=100', () => jsonResponse([
     { tag_name: 'v1.0.0', name: 'v1.0.0', published_at: '2026-09-20T00:00:00Z', body: 'one', html_url: '', prerelease: false },
   ])],
+  // gh-noref: github install without a ref, installed version behind the newest tag
+  ['https://api.github.com/repos/me/ghnoref/releases?per_page=100', () => jsonResponse([
+    { tag_name: 'v1.2.0', name: 'v1.2.0', published_at: '2026-10-10T00:00:00Z', body: 'two', html_url: '', prerelease: false },
+    { tag_name: 'v1.1.0', name: 'v1.1.0', published_at: '2026-09-10T00:00:00Z', body: 'one', html_url: '', prerelease: false },
+  ])],
+  // gh-noref-current: github install without a ref that already matches the newest tag
+  ['https://api.github.com/repos/me/ghcurrent/releases?per_page=100', () => jsonResponse([
+    { tag_name: 'v2.0.0', name: 'v2.0.0', published_at: '2026-09-20T00:00:00Z', body: '', html_url: '', prerelease: false },
+  ])],
+  // gh-unordered: no ref and a non-semver installed version → branch tracking
+  ['https://api.github.com/repos/me/ghdev/releases?per_page=100', () => jsonResponse([
+    { tag_name: 'v1.0.0', name: 'v1.0.0', published_at: '2026-09-20T00:00:00Z', body: '', html_url: '', prerelease: false },
+  ])],
   // fallback-pkg: dist-tags 404 on both registries → packument still works
   ['https://registry.npmjs.org/-/package/fallback-pkg/dist-tags', () => jsonResponse({ error: 'not found' }, { status: 404 })],
   ['https://registry.npmmirror.com/-/package/fallback-pkg/dist-tags', () => jsonResponse({ error: 'not found' }, { status: 404 })],
@@ -106,6 +119,9 @@ await stub('ahead-plugin', { name: 'ahead-plugin', version: '2.5.0', description
 await stub('equal-plugin', { name: 'equal-plugin', version: '2.0.0', description: 'equal', repository: { url: 'git+https://github.com/me/equalrepo.git' } });
 await stub('nov-prefix-plugin', { name: 'nov-prefix-plugin', version: '1.0.0', description: 'no v prefix', repository: { url: 'git+https://github.com/me/novrepo.git' } });
 await stub('gh-branch', { name: 'gh-branch', version: '0.0.0', description: 'branch ref' });
+await stub('gh-noref', { name: 'gh-noref', version: '1.0.0', description: 'github no ref' });
+await stub('gh-noref-current', { name: 'gh-noref-current', version: '2.0.0', description: 'github no ref current' });
+await stub('gh-unordered', { name: 'gh-unordered', version: 'dev', description: 'github no ref unorderable' });
 await stub('fallback-pkg', { name: 'fallback-pkg', version: '0.1.0', description: 'dist-tags dead' });
 await stub('dead-pkg', { name: 'dead-pkg', version: '0.0.1', description: 'all 500' });
 await writeFile(path.join(profileDir, 'package.json'), JSON.stringify({
@@ -121,6 +137,9 @@ await writeFile(path.join(profileDir, 'package.json'), JSON.stringify({
     'equal-plugin': 'link:D:/dev/equal-plugin',
     'nov-prefix-plugin': 'link:D:/dev/nov-prefix-plugin',
     'gh-branch': 'github:me/ghbranch#main',
+    'gh-noref': 'github:me/ghnoref',
+    'gh-noref-current': 'github:me/ghcurrent',
+    'gh-unordered': 'github:me/ghdev',
     'fallback-pkg': '0.1.0',
     'dead-pkg': '0.0.1',
   },
@@ -139,7 +158,7 @@ else process.env.GITHUB_TOKEN = savedToken;
 
 const byName = Object.fromEntries(result.rows.map((row) => [row.name, row]));
 
-check('skip @deepseek-ai/* deps', result.rows.length === 10, `rows=${result.rows.map((r) => r.name).join(',')}`);
+check('skip @deepseek-ai/* deps', result.rows.length === 13, `rows=${result.rows.map((r) => r.name).join(',')}`);
 check('current-pkg → latest via dist-tags fast path', byName['current-pkg']?.status === 'latest' && byName['current-pkg'].latest === '1.0.0');
 check('fast path fetched no packument for current-pkg', !hits.has('https://registry.npmjs.org/current-pkg'), [...hits.keys()].join(' '));
 check('outdated-pkg → update', byName['outdated-pkg']?.status === 'update' && byName['outdated-pkg'].latest === '1.1.0');
@@ -150,14 +169,17 @@ check('local-plugin → local-behind vs v2.0.0', byName['local-plugin']?.status 
 check('ahead-plugin → local-ahead (installed newer than upstream)', byName['ahead-plugin']?.status === 'local-ahead' && byName['ahead-plugin'].latest === 'v2.0.0');
 check('equal-plugin → local-latest', byName['equal-plugin']?.status === 'local-latest');
 check('nov-prefix-plugin notes stop at installed version despite no v prefix', byName['nov-prefix-plugin']?.status === 'local-behind' && byName['nov-prefix-plugin']?.releases?.map((r) => r.tag).join(',') === '2.0.0', JSON.stringify(byName['nov-prefix-plugin']?.releases?.map((r) => r.tag)));
-check('gh-branch (branch ref) → branch, not unknown', byName['gh-branch']?.status === 'branch' && byName['gh-branch'].releases?.length === 1);
+check('gh-branch (branch ref, installed version orderable) → update', byName['gh-branch']?.status === 'update' && byName['gh-branch'].releases?.map((r) => r.tag).join(',') === 'v1.0.0', JSON.stringify(byName['gh-branch']?.releases?.map((r) => r.tag)));
+check('gh-noref (no ref) → update past installed 1.0.0', byName['gh-noref']?.status === 'update' && byName['gh-noref'].latest === 'v1.2.0' && byName['gh-noref'].releases?.map((r) => r.tag).join(',') === 'v1.2.0,v1.1.0', JSON.stringify(byName['gh-noref']?.releases?.map((r) => r.tag)));
+check('gh-noref-current (no ref, installed == newest tag) → latest', byName['gh-noref-current']?.status === 'latest' && byName['gh-noref-current'].latest === 'v2.0.0');
+check('gh-unordered (non-semver installed) → branch, not update', byName['gh-unordered']?.status === 'branch' && byName['gh-unordered'].releases?.length === 1);
 check('GITHUB_TOKEN forwarded as bearer header', seenAuth.length > 0 && seenAuth.every((value) => value === 'Bearer test-token-123'), seenAuth.join('|'));
 check('fallback-pkg survives dist-tags 404 via packument', byName['fallback-pkg']?.status === 'update' && byName['fallback-pkg'].latest === '0.2.0');
 check('dead-pkg → error row, scan survives', byName['dead-pkg']?.status === 'error' && typeof byName['dead-pkg'].error === 'string');
 
 const statuses = result.rows.map((row) => row.status);
 check('sort: update rows before local-behind before error', statuses.indexOf('update') === 0 && statuses.lastIndexOf('update') < statuses.indexOf('local-behind') && statuses.indexOf('local-behind') < statuses.indexOf('error'), statuses.join(','));
-check('counts summarize statuses', result.counts.update === 3 && result.counts['local-behind'] === 2 && result.counts.error === 1 && result.counts.latest === 1 && result.counts['local-ahead'] === 1 && result.counts['local-latest'] === 1 && result.counts.branch === 1, JSON.stringify(result.counts));
+check('counts summarize statuses', result.counts.update === 5 && result.counts['local-behind'] === 2 && result.counts.error === 1 && result.counts.latest === 2 && result.counts['local-ahead'] === 1 && result.counts['local-latest'] === 1 && result.counts.branch === 1, JSON.stringify(result.counts));
 check('stats attached with request counts', typeof result.stats.requests === 'number' && result.stats.requests > 0, JSON.stringify(result.stats));
 
 const firstRunRequests = result.stats.requests;
