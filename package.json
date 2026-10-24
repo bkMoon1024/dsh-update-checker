@@ -1,6 +1,6 @@
 {
   "name": "dsh-update-checker",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "description": "One-click & background update checker for DeepSeek Harness third-party plugins: upstream detection, changelog diffs, sidebar reminders, and safe AI-assisted updates.",
   "license": "MIT",
@@ -26,7 +26,8 @@
   ],
   "icon": "./icon.svg",
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "dsh": "^0.2.0-rc.1"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.0"

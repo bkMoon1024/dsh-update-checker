@@ -119,6 +119,8 @@ dsh plugin --profile web add github:daha1216/dsh-update-checker
 > 💡 **Important Notes**:
 > 1. After installing, **completely restart the DSH Desktop application** (to load the host Cordis module) and **refresh the GUI page** (to load the frontend script).
 > 2. To update the checker itself later, simply re-run the same `add` command.
+>
+> **Compatibility**: `engines.dsh` declares `^0.2.0-rc.1`, i.e. **DSH 0.2.0-rc.1 up to (but not including) 0.3.0**. On an unsupported runtime the plugin manager refuses with `incompatible-version`; add a one-off exemption with `dsh plugin allow-version` if you really need to try it elsewhere. Once DSH reaches 0.3.x this plugin needs a new release to widen the range.
 
 ### Option 2: Local Development (Checkout Mode)
 

@@ -119,6 +119,8 @@ dsh plugin --profile web add github:daha1216/dsh-update-checker
 > 💡 **重要说明**：
 > 1. 安装完成后，**请完全退出并重新启动 DSH 桌面端**（使宿主模块加载生效），然后**刷新一次 GUI 页面**（加载设置页脚本）。
 > 2. 后续若要更新巡检器自身，重新运行上述相同的 `add` 命令即可。
+>
+> **兼容性**：`engines.dsh` 声明 `^0.2.0-rc.1`，即 **DSH 0.2.0-rc.1 及以上、0.3.0 之前**。装到不匹配的版本时，插件管理器会以 `incompatible-version` 明确拒绝；确实要在别的版本上试，可用 `dsh plugin allow-version` 加一次性豁免。DSH 升到 0.3.x 后需要本插件发新版放开范围。
 
 ### 方式二：本地开发安装（Checkout 模式）
 
