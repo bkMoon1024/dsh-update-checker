@@ -26,15 +26,19 @@ import {
   writeReminderState,
 } from '../lib/reminder.js';
 
-const CORDIS_URL = process.env.DSH_CORDIS_PATH
-  || 'file:///D:/dsh%20work/_dsh_src/dsh/node_modules/@deepseek-ai/cordis/lib/index.js';
+import { CORDIS_URL, CORDIS_SKIP_HINT } from './cordis-path.mjs';
 const PLUGIN_URL = new URL('../index.js', import.meta.url).href;
 
 let Context;
+if (!CORDIS_URL) {
+  console.log(CORDIS_SKIP_HINT);
+  process.exit(0);
+}
 try {
   ({ Context } = await import(CORDIS_URL));
-} catch {
-  console.log(`SKIP  cordis checkout not found at ${CORDIS_URL} (set DSH_CORDIS_PATH to run)`);
+} catch (error) {
+  console.log(`${CORDIS_SKIP_HINT}
+  (import failed: ${error?.message ?? error})`);
   process.exit(0);
 }
 

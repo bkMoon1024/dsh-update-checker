@@ -16,8 +16,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { setTimeout as sleep } from 'node:timers/promises';
 
 // Machine-specific paths are overridable via env; defaults resolve portably.
-const CORDIS_URL = process.env.DSH_CORDIS_PATH
-  || 'file:///D:/dsh%20work/_dsh_src/dsh/node_modules/@deepseek-ai/cordis/lib/index.js';
+import { CORDIS_URL, CORDIS_SKIP_HINT } from './cordis-path.mjs';
 const PLUGIN_URL = new URL('../index.js', import.meta.url).href;
 const PROFILE_DIR = process.env.DSH_PROFILE_DIR
   || path.join(os.homedir(), '.dsh', 'profiles', 'desktop');
@@ -46,6 +45,10 @@ await writeFile(path.join(HOME_DIR, 'dsh-update-checker-last.json'), JSON.string
   stats: {},
 }));
 
+if (!CORDIS_URL) {
+  console.log(CORDIS_SKIP_HINT);
+  process.exit(0);
+}
 const { Context } = await import(CORDIS_URL);
 const plugin = await import(PLUGIN_URL);
 

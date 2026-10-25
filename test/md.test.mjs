@@ -7,7 +7,7 @@
  */
 let captured = null;
 globalThis.window = { __ModuleLoader__: { load(mod) { captured = mod; } } };
-await import('file:///D:/dsh%20work/dsh-update-checker/client/client.js');
+await import(new URL('../client/client.js', import.meta.url).href);
 
 if (!captured || captured.id !== 'dsh-update-checker') throw new Error('module not captured');
 const reactStub = { createElement: (...args) => args, Fragment: 'Fragment' };
