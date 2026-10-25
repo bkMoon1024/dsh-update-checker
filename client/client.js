@@ -86,6 +86,10 @@ window.__ModuleLoader__.load({
         reminderIgnoreAll: '全部忽略',
         reminderCheck: '立即检查',
         reminderChecking: '检查中…',
+        reminderCheckingElapsed: '检查中… %ds',
+        reminderCheckFailed: '检查失败，请稍后再试',
+        reminderCheckTimeout: '检查超时，请稍后再试',
+        reminderCheckedNow: '刚刚已检查',
         reminderEmpty: '没有待更新的插件。',
         reminderNever: '还没检查过插件更新。',
         reminderError: '上次检查失败',
@@ -162,6 +166,10 @@ window.__ModuleLoader__.load({
         reminderIgnoreAll: 'Ignore all',
         reminderCheck: 'Check now',
         reminderChecking: 'Checking…',
+        reminderCheckingElapsed: 'Checking… %ds',
+        reminderCheckFailed: 'Check failed — try again',
+        reminderCheckTimeout: 'The check timed out — try again',
+        reminderCheckedNow: 'Checked just now',
         reminderEmpty: 'Nothing to update.',
         reminderNever: 'Plugin updates have not been checked yet.',
         reminderError: 'Last check failed',
@@ -826,6 +834,8 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = useState(false);
       const [anchor, setAnchor] = useState(null);
       const [busy, setBusy] = useState(false);
+      const [elapsed, setElapsed] = useState(0);
+      const [note, setNote] = useState('');
 
       const reload = async () => {
         try {
@@ -877,11 +887,31 @@ window.__ModuleLoader__.load({
       const checkNow = async () => {
         if (busy) return;
         setBusy(true);
+        setNote('');
+        setElapsed(0);
+        const startedAt = Date.now();
+        // A scan can take tens of seconds on the anonymous GitHub quota, and
+        // a button that only says "checking" reads as a dead button.
+        const ticker = setInterval(() => {
+          setElapsed(Math.round((Date.now() - startedAt) / 1000));
+        }, 500);
+        // The scan itself is bounded; this covers a lost RPC response, which
+        // would otherwise leave the button disabled for the whole session.
+        const watchdog = setTimeout(() => {
+          setBusy(false);
+          setNote(t('reminderCheckTimeout'));
+        }, 90_000);
+        let failure = '';
         try {
-          await rpcCall('check.run', undefined);
-        } catch { /* surfaced by the settings page */ }
+          await rpcCall('check.run', { force: true });
+        } catch {
+          failure = t('reminderCheckFailed');
+        }
+        clearInterval(ticker);
+        clearTimeout(watchdog);
         await reload();
         setBusy(false);
+        setNote(failure || t('reminderCheckedNow'));
       };
 
       const ignore = async (mode) => {
@@ -952,7 +982,9 @@ window.__ModuleLoader__.load({
               className: 'dsh-uc-btn dsh-uc-btn-secondary dsh-uc-btn-sm',
               disabled: busy,
               onClick: checkNow,
-            }, busy ? t('reminderChecking') : t('reminderCheck')),
+            }, busy
+              ? t('reminderCheckingElapsed').replace('%ds', String(elapsed))
+              : t('reminderCheck')),
             h('button', {
               type: 'button',
               className: 'dsh-uc-btn dsh-uc-btn-ghost dsh-uc-btn-sm',
@@ -964,6 +996,10 @@ window.__ModuleLoader__.load({
               onClick: () => { void ignore('all'); },
             }, t('reminderIgnoreAll')),
           ),
+          h('div', { className: 'dsh-uc-reminder-panel-note', role: 'status' },
+            note || (state.lastCheckAt
+              ? t('reminderLastAt').replace('%s', formatRelative(state.lastCheckAt, t))
+              : t('reminderNeverChecked'))),
         ) : null,
       );
     }
@@ -998,7 +1034,7 @@ window.__ModuleLoader__.load({
         setRunning(true);
         setError('');
         try {
-          setData(await rpcCall('check.run', undefined));
+          setData(await rpcCall('check.run', { force: true }));
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -2059,6 +2095,11 @@ window.__ModuleLoader__.load({
   gap: 8px;
   padding: 10px 12px;
   border-top: .5px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.25));
+}
+.dsh-uc-reminder-panel-note {
+  padding: 0 12px 10px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary, rgba(128,128,128,0.75));
 }
 
 /* Focus Visible */

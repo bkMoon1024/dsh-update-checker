@@ -476,6 +476,10 @@ async function handleRpc(ctx, internal, endpoint, payload, signal) {
     return fail('bad-request', 'dsh-update-checker is not active.');
   }
   if (endpoint === 'check.run') {
+    // A click is a request for a fresh answer: without this, a second click
+    // inside the 90s window returns the cached result and looks like the
+    // button did nothing.
+    const force = payload?.force === true;
     // Freshness window: a click within 90s of a completed scan reuses its
     // result instead of burning another ~15 upstream requests (the GitHub
     // API allows only 60 anonymous calls/hour — ~6 rapid clicks would
@@ -483,6 +487,7 @@ async function handleRpc(ctx, internal, endpoint, payload, signal) {
     if (
       lastResult
       && lastResult.profileDir === profileContext.dir
+      && !force
       && Date.now() - new Date(lastResult.at).getTime() < 90_000
       && !inFlightRun
     ) {
