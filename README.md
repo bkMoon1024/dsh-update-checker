@@ -231,6 +231,14 @@ npm run test:e2e
 
 ---
 
+## 🙏 贡献者
+
+感谢为项目提交代码与改进建议的贡献者：
+
+- [@lanslot4n93r](https://github.com/lanslot4n93r) — 深色模式主按钮配色修复（改用 `label-primary-inverted`）。
+
+---
+
 ## 📄 开源协议
 
 本项目基于 [MIT License](./LICENSE) 协议开源。

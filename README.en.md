@@ -221,6 +221,14 @@ npm run test:e2e
 
 ---
 
+## 🙏 Contributors
+
+Thanks to everyone who contributed code and improvements to this project:
+
+- [@lanslot4n93r](https://github.com/lanslot4n93r) — dark-mode primary button color fix (`label-primary-inverted`).
+
+---
+
 ## 📄 License
 
 Open-sourced under the [MIT License](./LICENSE).
