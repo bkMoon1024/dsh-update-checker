@@ -171,9 +171,12 @@ dsh-update-checker/
 
 ## 🧪 自动化测试
 
-项目遵循严格的测试驱动开发规范，内置 8 个独立测试套件、覆盖 **190+ 项断言**，涵盖纯函数、出站层、端到端集成与宿主生命周期验证：
+项目遵循严格的测试驱动开发规范，内置 8 个独立测试套件、覆盖 **200+ 项断言**，涵盖纯函数、出站层、端到端集成与宿主生命周期验证：
 
 ```bash
+# 首次运行先装开发依赖（lifecycle / reminder-scheduler 需要真实的 @deepseek-ai/cordis）
+npm install
+
 # 运行离线全量单元测试
 npm test
 
@@ -181,14 +184,16 @@ npm test
 npm run test:e2e
 ```
 
+`@deepseek-ai/cordis` 在插件运行时是 peer 依赖（由宿主提供），这里作为 devDependency 只为让两个需要真实 Cordis 上下文的套件能在任意机器上跑起来。若想复用宿主自带的 cordis 而不是 npm 装的那份，设置 `DSH_CORDIS_PATH` 指向它的 `lib/index.js` 即可，会优先生效；两个套件在拿不到 cordis 时会打印明确的 SKIP 提示，而不是静默通过。
+
 测试矩阵包含：
 - `test/checker.test.mjs`：38 项断言，覆盖版本提取、来源判定与状态流转；
 - `test/http.test.mjs`：19 项测试，覆盖 TTL 缓存、单飞合并、ETag 304 条件复用与熔断降级；
-- `test/integration.test.mjs`：21 项测试，脚本化网络模拟下的复杂检查流；
+- `test/integration.test.mjs`：24 项测试，脚本化网络模拟下的复杂检查流；
 - `test/md.test.mjs`：23 项测试，深度校验 Markdown 语法解析保真度；
 - `test/render-harness.mjs`：客户端设置页与浮层气泡离线渲染冒烟测试；
 - `test/lifecycle.test.mjs`：真实 Cordis 4 环境下插件加载、卸载与资源释放测试；
-- `test/reminder.test.mjs`：56 项断言，后台提醒状态机、忽略语义与原子读写校验；
+- `test/reminder.test.mjs`：57 项断言，后台提醒状态机、忽略语义与原子读写校验；
 - `test/reminder-scheduler.test.mjs`：33 项断言，调度器防重排竞态与 RPC 降级回归测试。
 
 ---

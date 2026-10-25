@@ -32,6 +32,9 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.0"
   },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.0"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
