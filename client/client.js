@@ -79,6 +79,13 @@ window.__ModuleLoader__.load({
         askAiNoSession: '当前没有打开的会话，请先新建会话',
         updateAction: '让 AI 更新',
         askAiPrompt: '帮我更新 %s 插件',
+        batchUpdate: '一键更新',
+        batchUpdateHint: '把检测到的更新整理成一条指令发给 AI，由它逐个执行',
+        batchUpdateSent: '已把更新清单发给 AI',
+        batchUpdateDraft: '已填入输入框，按发送即可',
+        batchUpdateEmpty: '当前没有可更新的插件',
+        batchUpdatePrompt: '帮我更新这些检测到新版本的 DSH 插件，逐个更新，完成后告诉我每个插件的结果。',
+        batchUpdateProfile: 'profile：%s，插件装在该 profile 下。',
         reminderTitle: '有 %d 个插件可以更新',
         reminderEntry: '插件更新',
         reminderPending: '%d 个可更新',
@@ -159,6 +166,13 @@ window.__ModuleLoader__.load({
         askAiNoSession: 'No open session — start one first',
         updateAction: 'Ask AI to update',
         askAiPrompt: 'Please update the %s plugin',
+        batchUpdate: 'Update all',
+        batchUpdateHint: 'Hands every detected update to the AI as one request',
+        batchUpdateSent: 'Sent the update list to the AI',
+        batchUpdateDraft: 'Filled the composer — press send',
+        batchUpdateEmpty: 'Nothing to update right now',
+        batchUpdatePrompt: 'Please update these DSH plugins that have newer versions. Update them one by one and report the result for each.',
+        batchUpdateProfile: 'Profile: %s — the plugins are installed in this profile.',
         reminderTitle: '%d plugin updates available',
         reminderEntry: 'Plugin updates',
         reminderPending: '%d to update',
@@ -628,11 +642,11 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Prefill the composer with an update request for one plugin. Returns the
-     * outcome so callers can tell the user what happened: 'draft' when the
-     * composer took the text, 'clipboard' when only a copy was possible.
+     * Composer actions for the open session, or undefined when no session is
+     * mounted. `setDraft` / `submit` are the host's own input actions, so a
+     * plugin hands text over instead of driving the editor itself.
      */
-    function fillComposerDraft(ctx, text) {
+    function resolveInputActions(ctx) {
       let uiSession;
       try {
         uiSession = typeof ctx.get === 'function' ? ctx.get('uiSession') : undefined;
@@ -640,7 +654,28 @@ window.__ModuleLoader__.load({
         uiSession = undefined;
       }
       uiSession = uiSession ?? ctx.uiSession;
-      const actions = uiSession?.adapter?.current?.getSnapshot?.()?.props?.inputActions;
+      return uiSession?.adapter?.current?.getSnapshot?.()?.props?.inputActions;
+    }
+
+    function copyToClipboard(text) {
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+          void navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch {
+        /* no clipboard either */
+      }
+      return false;
+    }
+
+    /**
+     * Prefill the composer with an update request for one plugin. Returns the
+     * outcome so callers can tell the user what happened: 'draft' when the
+     * composer took the text, 'clipboard' when only a copy was possible.
+     */
+    function fillComposerDraft(ctx, text) {
+      const actions = resolveInputActions(ctx);
       if (actions && typeof actions.setDraft === 'function') {
         try {
           actions.setDraft(text);
@@ -649,15 +684,58 @@ window.__ModuleLoader__.load({
           /* fall through to the clipboard */
         }
       }
-      try {
-        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-          void navigator.clipboard.writeText(text);
-          return 'clipboard';
-        }
-      } catch {
-        /* no clipboard either */
+      return copyToClipboard(text) ? 'clipboard' : 'none';
+    }
+
+    /**
+     * Hand the request to the AI and press send: 'sent' when the composer took
+     * the text and submitted it, 'draft' when it only took the text (no submit
+     * channel), 'clipboard' / 'none' when there was no composer at all.
+     */
+    function sendComposerText(ctx, text) {
+      const actions = resolveInputActions(ctx);
+      if (!actions || typeof actions.setDraft !== 'function') {
+        return copyToClipboard(text) ? 'clipboard' : 'none';
       }
-      return 'none';
+      try {
+        actions.setDraft(text);
+      } catch {
+        return copyToClipboard(text) ? 'clipboard' : 'none';
+      }
+      if (typeof actions.submit !== 'function') return 'draft';
+      try {
+        actions.submit();
+        return 'sent';
+      } catch {
+        return 'draft';
+      }
+    }
+
+    /** Rows whose upstream is ahead: the ones a batch update should cover. */
+    function isActionable(row) {
+      return row?.status === 'update' || row?.status === 'local-behind';
+    }
+
+    /**
+     * One prompt covering every actionable row. The spec is included because it
+     * is the only thing that tells the AI *how* each plugin is installed: an npm
+     * or GitHub spec is re-added, a `file:` / `link:` spec is a local checkout
+     * that has to be pulled instead.
+     */
+    function buildBatchPrompt(rows, t, profileDir) {
+      const list = rows.map((row, index) => {
+        const from = row.installed || '?';
+        const to = row.latest || '?';
+        const spec = row.spec ? `（${row.spec}）` : '';
+        return `${index + 1}. ${row.name}  ${from} → ${to}${spec}`;
+      });
+      const profile = typeof profileDir === 'string' && profileDir !== ''
+        ? profileDir.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
+        : '';
+      const parts = [t('batchUpdatePrompt')];
+      if (profile) parts.push(t('batchUpdateProfile').replace('%s', profile));
+      parts.push(list.join('\n'));
+      return parts.join('\n');
     }
 
     function PluginRow({ row, t, open, onToggle, onAskAi }) {
@@ -829,7 +907,7 @@ window.__ModuleLoader__.load({
      * Footer entry beside the host's own update indicator: one line above the
      * settings group, because the settings row itself exposes no slot.
      */
-    function UpdateReminder({ wide, t, rpcCall, askAi }) {
+    function UpdateReminder({ wide, t, rpcCall, askAi, sendAi }) {
       const [state, setState] = useState(null);
       const [open, setOpen] = useState(false);
       const [anchor, setAnchor] = useState(null);
@@ -926,6 +1004,18 @@ window.__ModuleLoader__.load({
         if (outcome !== 'none') setOpen(false);
       };
 
+      // One request for the whole pending set. 'sent' / 'draft' both leave the
+      // outcome visible in the composer, so the panel can close; a clipboard or
+      // missing-session outcome has to stay on screen to be noticed.
+      const updateAll = () => {
+        const outcome = sendAi(buildBatchPrompt(pending, t, state?.profileDir));
+        if (outcome === 'sent' || outcome === 'draft') {
+          setOpen(false);
+          return;
+        }
+        setNote(outcome === 'clipboard' ? t('askAiCopied') : t('askAiNoSession'));
+      };
+
       return h('div', {
         className: `dsh-uc-reminder${wide ? '' : ' dsh-uc-reminder-rail'}`,
         'data-dsh-uc-reminder': 'true',
@@ -979,6 +1069,12 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-uc-reminder-panel-foot' },
             h('button', {
               type: 'button',
+              className: 'dsh-uc-btn dsh-uc-btn-primary dsh-uc-btn-sm',
+              title: t('batchUpdateHint'),
+              onClick: updateAll,
+            }, t('batchUpdate')),
+            h('button', {
+              type: 'button',
               className: 'dsh-uc-btn dsh-uc-btn-secondary dsh-uc-btn-sm',
               disabled: busy,
               onClick: checkNow,
@@ -1005,7 +1101,7 @@ window.__ModuleLoader__.load({
     }
 
     function Page(props) {
-      const { rpcCall, t, askAi, close } = props;
+      const { rpcCall, t, askAi, sendAi, close } = props;
       const [running, setRunning] = useState(false);
       const [data, setData] = useState(null);
       const [loadingCache, setLoadingCache] = useState(true);
@@ -1062,6 +1158,23 @@ window.__ModuleLoader__.load({
       };
 
       const rows = data?.rows ?? [];
+      const actionable = rows.filter(isActionable);
+
+      // Same handover as the per-row button, but for every actionable row at
+      // once — and this one sends, since "one click" is the point.
+      const onBatchUpdate = () => {
+        if (actionable.length === 0) {
+          setNotice(t('batchUpdateEmpty'));
+          return;
+        }
+        const outcome = sendAi(buildBatchPrompt(actionable, t, data?.profileDir));
+        setNotice(outcome === 'sent' ? t('batchUpdateSent')
+          : outcome === 'draft' ? t('batchUpdateDraft')
+            : outcome === 'clipboard' ? t('askAiCopied') : t('askAiNoSession'));
+        if (outcome === 'sent' || outcome === 'draft') {
+          try { close?.(); } catch { /* panel already gone */ }
+        }
+      };
 
       // Derived lists are memoized so toggling one row's notes (an openNames
       // update) does not re-run the group count + filter + sort pipeline.
@@ -1110,9 +1223,15 @@ window.__ModuleLoader__.load({
             h('p', { className: 'dsh-uc-header-desc' }, t('intro')),
           ),
           h('div', { className: 'dsh-uc-header-actions' },
-            h('button', {
+            actionable.length > 0 ? h('button', {
               type: 'button',
               className: 'dsh-uc-btn dsh-uc-btn-primary',
+              title: t('batchUpdateHint'),
+              onClick: onBatchUpdate,
+            }, `${t('batchUpdate')} (${actionable.length})`) : null,
+            h('button', {
+              type: 'button',
+              className: actionable.length > 0 ? 'dsh-uc-btn dsh-uc-btn-secondary' : 'dsh-uc-btn dsh-uc-btn-primary',
               disabled: running,
               onClick: run,
             },
@@ -2092,6 +2211,7 @@ window.__ModuleLoader__.load({
 .dsh-uc-reminder-panel-foot {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 10px 12px;
   border-top: .5px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.25));
@@ -2170,15 +2290,16 @@ window.__ModuleLoader__.load({
         };
 
         // Shared by the settings page and the footer panel: both hand the same
-        // update request to the composer.
+        // update request to the composer; the batch button also presses send.
         const askAi = (text) => fillComposerDraft(ctx, text);
+        const sendAi = (text) => sendComposerText(ctx, text);
 
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: 'update-checker',
           order: 86,
           label: () => t('sectionLabel'),
-          inject: () => ({ rpcCall, t, askAi }),
+          inject: () => ({ rpcCall, t, askAi, sendAi }),
         }, Page));
 
         // One row above the settings group in the sidebar footer — the closest
@@ -2188,10 +2309,10 @@ window.__ModuleLoader__.load({
           name: 'sidebar.footer.action',
           id: 'update-reminder',
           locale: NS,
-          inject: () => ({ rpcCall, t, askAi }),
+          inject: () => ({ rpcCall, t, askAi, sendAi }),
         }, UpdateReminder));
       },
-      _internals: { parseMarkdownBody, parseInline, fillComposerDraft, safeHref },
+      _internals: { parseMarkdownBody, parseInline, fillComposerDraft, sendComposerText, buildBatchPrompt, isActionable, safeHref },
     };
   },
 });

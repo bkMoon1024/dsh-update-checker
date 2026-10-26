@@ -57,9 +57,10 @@ As the DeepSeek Harness (DSH) plugin ecosystem expands, third-party extensions�
   - **Ignore All**: Marks all current updates as acknowledged and suppresses ongoing alerts.
   - **Durable Persistence**: Dismissal preferences and pending update lists persist across DSH restarts and profile reloads.
 
-### 3. 🤖 AI-Assisted Updates: "Update with AI"
+### 3. 🤖 AI-Assisted Updates: "Update with AI" and "Update all"
 - **Strict Read-Only Guarantee**: The plugin **never runs package managers or alters `node_modules` and config files on its own**.
 - **One-Click Agent Delegation**: Clicking "Update with AI" fills the chat input with a standardized prompt (e.g., `Help me update the billion-context plugin`). If no session is active or focused, it cleanly falls back to copying the instruction to your clipboard, allowing the agent to follow best practices in an isolated sandbox.
+- **Update All (batch)**: When several plugins are outdated, an "Update all" button appears in the popup footer and in the settings page header. One click turns the whole pending list into a single prompt **and sends it** — the list carries each plugin name, installed → latest version, install spec (`file:` / `link:` / `github:` / npm) and the profile name, so the agent can update them one by one and report back. The per-row button only fills the composer; the batch button fills and submits. With no open session it falls back to the clipboard and says so.
 
 ### 4. 📖 Deep Changelog Parsing (Release Notes Diff)
 - **Range-Aware Release Aggregation**: Aggregates all Release entries between the currently installed version and the latest stable release.
