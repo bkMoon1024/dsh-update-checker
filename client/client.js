@@ -2301,10 +2301,14 @@ window.__ModuleLoader__.load({
 .dsh-uc-reminder {
   position: relative;
   display: flex;
-  width: 100%;
-  flex: none;
+  /* 侧栏底部是多插件共用的 flex 行：写死 width:100% 且不可收缩，会把同行的其它入口顶到行外。
+     改成吃剩余宽度：有空间就铺开，没空间就自己收，标题过长交给 label 的 ellipsis。 */
+  flex: 1 1 0%;
+  min-width: 0;
 }
 .dsh-uc-reminder-rail {
+  /* 折叠态按图标宽度固定，不参与伸缩 */
+  flex: 0 0 36px;
   width: 36px;
   justify-content: center;
 }

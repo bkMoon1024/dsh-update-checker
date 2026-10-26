@@ -185,16 +185,22 @@ npm run test:e2e
 
 - `test/checker.test.mjs`: 38 assertions for version resolution, spec mapping, and status transitions.
 - `test/http.test.mjs`: 19 tests verifying TTL caching, single-flight coalescing, ETag revalidation, and circuit breaking.
-- `test/integration.test.mjs`: 21 tests simulating complete check pipelines under scripted network conditions.
+- `test/integration.test.mjs`: 24 tests simulating complete check pipelines under scripted network conditions.
 - `test/md.test.mjs`: 23 tests validating Markdown parser accuracy and sanitization.
 - `test/render-harness.mjs`: Headless React rendering smoke tests for settings and popup views.
 - `test/lifecycle.test.mjs`: Real Cordis 4 lifecycle tests validating clean disposal and route teardown.
-- `test/reminder.test.mjs`: 56 assertions covering reminder state logic, ignore semantics, and atomic persistence.
+- `test/reminder.test.mjs`: 57 assertions covering reminder state logic, ignore semantics, and atomic persistence.
+- `test/reminder-panel.test.mjs`: 16 source guards locking the force-refresh path, timers/watchdog and status-line copy.
+- `test/batch-update.test.mjs`: 43 assertions covering the batch list, updatable predicate and the "new conversation, fill but do not send" handoff.
 - `test/reminder-scheduler.test.mjs`: 33 assertions testing scheduler interval rescheduling and RPC fallbacks.
 
 ---
 
 ## 📝 Changelog
+
+### v0.7.1 (2026-10-27)
+- **Fixed: the sidebar entry no longer squeezes other plugins out of its row.** The sidebar footer is a flex row shared by several plugins, and this one hard-coded `width: 100%` with `flex: none` — whenever another entry shared the row (for example the dsh-purge status dot), it took the entire width and left that entry a few pixels wide. It now uses `flex: 1 1 0%; min-width: 0`, spreading when there is room and shrinking when there isn't, with overlong titles handled by the existing ellipsis; the collapsed rail keeps an explicit `flex: 0 0 36px`, matching its previous width.
+- Client-side CSS only: a page refresh applies it and no host restart is needed. No backend, state machine, or storage-format changes.
 
 ### v0.7.0 (2026-10-26)
 - **Settings page rebuilt around updates, with configuration folded away**: the rarely-touched background settings no longer own the first screen, and long descriptions no longer crowd out the plugin list.
