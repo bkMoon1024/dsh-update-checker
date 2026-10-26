@@ -1,6 +1,7 @@
 /**
  * Tests for the one-click batch update: the prompt the plugin hands to the AI,
- * which rows count as updatable, and the composer handover (setDraft + submit).
+ * which rows count as updatable, and the handover into a *new* conversation
+ * (start session → fill the composer → never submit).
  *
  * Run: node test/batch-update.test.mjs
  */
@@ -21,8 +22,8 @@ const plugin = captured.factory((name) => reactStub);
 const {
   buildBatchPrompt,
   isActionable,
-  sendComposerText,
   fillComposerDraft,
+  draftInNewSession,
 } = plugin._internals;
 
 const results = [];
@@ -64,7 +65,8 @@ check('no profile line without a profile dir', !noProfile.includes('profile：')
 check('rows without spec still render', buildBatchPrompt([{ name: 'x', installed: '1', latest: '2' }], t, '').includes('1. x  1 → 2'));
 check('missing versions degrade to ?', buildBatchPrompt([{ name: 'x' }], t, '').includes('x  ? → ?'));
 
-// --- 3. composer handover: setDraft then submit --------------------------
+// --- 3. the handover never submits --------------------------------------
+/** A composer stub that records what the plugin asked of it. */
 function actionsStub(overrides = {}) {
   const calls = [];
   const actions = {
@@ -75,31 +77,98 @@ function actionsStub(overrides = {}) {
   };
   return actions;
 }
-const withActions = (actions) => ({
-  get: (name) => (name === 'uiSession' ? { adapter: { current: { getSnapshot: () => ({ props: { inputActions: actions } }) } } } : undefined),
-});
-
-const ok = actionsStub();
-check('sendComposerText reports sent', sendComposerText(withActions(ok), 'hello') === 'sent');
-check('sendComposerText drafts first', ok.calls[0]?.[0] === 'setDraft' && ok.calls[0]?.[1] === 'hello');
-check('sendComposerText submits after', ok.calls[1]?.[0] === 'submit' && ok.calls.length === 2);
-
-const noSubmit = actionsStub({ submit: undefined });
-check('no submit channel degrades to draft', sendComposerText(withActions(noSubmit), 'x') === 'draft');
-
-const throwingSubmit = actionsStub({ submit: () => { throw new Error('busy'); } });
-check('submit that throws keeps the draft', sendComposerText(withActions(throwingSubmit), 'x') === 'draft');
 
 const setClipboard = (value) => Object.defineProperty(globalThis, 'navigator', { value, configurable: true, writable: true });
 
-const throwingDraft = actionsStub({ setDraft: () => { throw new Error('no editor'); } });
-setClipboard({ clipboard: { writeText: () => undefined } });
-check('draft that throws falls back to clipboard', sendComposerText(withActions(throwingDraft), 'x') === 'clipboard');
-check('fillComposerDraft never submits', fillComposerDraft(withActions(actionsStub()), 'y') === 'draft');
+/**
+ * A uiSession adapter stub: `current` starts on the old session and switches to
+ * the new one when the workspace's startSession is called, mirroring the host
+ * (creation is async, the binding lands a tick later).
+ */
+function hostStub({ sessionActions, submitThrows = false } = {}) {
+  const oldActions = actionsStub();
+  const nextActions = sessionActions ?? actionsStub();
+  const listeners = new Set();
+  let key = 'old-session';
+  const source = {
+    getSnapshot: () => ({
+      key,
+      props: { inputActions: key === 'old-session' ? oldActions : nextActions },
+    }),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const uiSession = { adapter: { current: source } };
+  const uiWorkspace = {
+    startSessionCalls: 0,
+    startSession() {
+      this.startSessionCalls += 1;
+      // The host mounts the new session asynchronously, so the binding only
+      // flips after startSession() returns.
+      setTimeout(() => {
+        key = 'new-session';
+        for (const listener of [...listeners]) listener();
+      }, 0);
+      return Promise.resolve();
+    },
+  };
+  return {
+    ctx: { get: (name) => (name === 'uiSession' ? uiSession : name === 'uiWorkspace' ? uiWorkspace : undefined) },
+    oldActions,
+    nextActions,
+    uiWorkspace,
+    submitThrows,
+  };
+}
 
-const none = { get: () => undefined };
-setClipboard({});
-check('no session and no clipboard reports none', sendComposerText(none, 'x') === 'none');
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+{
+  const host = hostStub();
+  setClipboard({ clipboard: { writeText: () => undefined } });
+  const outcome = draftInNewSession(host.ctx, 'update them');
+  check('batch handover starts a new conversation', host.uiWorkspace.startSessionCalls === 1, `outcome=${outcome}`);
+  check('batch handover reports session', outcome === 'session');
+  check('draft does not land in the old session', host.oldActions.calls.length === 0, JSON.stringify(host.oldActions.calls));
+  await wait(10);
+  check('draft lands in the new session', host.nextActions.calls[0]?.[0] === 'setDraft' && host.nextActions.calls[0]?.[1] === 'update them');
+  check('batch handover never submits', !host.nextActions.calls.some((call) => call[0] === 'submit'), JSON.stringify(host.nextActions.calls));
+}
+
+// A host whose new session has no composer yet: the draft is still owed, and
+// must not be dropped onto the previous conversation's composer.
+{
+  const host = hostStub({ sessionActions: { calls: [] } });
+  setClipboard({});
+  const outcome = draftInNewSession(host.ctx, 'x');
+  check('no composer in the new session still reports session', outcome === 'session', `outcome=${outcome}`);
+  check('no composer means no stray draft', host.oldActions.calls.length === 0 && host.nextActions.calls.length === 0);
+}
+
+// No workspace navigation (older host, or the service is not exposed): fall
+// back to filling the composer that is already open.
+{
+  const actions = actionsStub();
+  const ctx = { get: (name) => (name === 'uiSession' ? { adapter: { current: { getSnapshot: () => ({ key: 's', props: { inputActions: actions } }) } } } : undefined) };
+  setClipboard({});
+  check('no workspace service falls back to the open composer', draftInNewSession(ctx, 'y') === 'draft');
+  check('fallback fills the open composer', actions.calls[0]?.[0] === 'setDraft' && actions.calls.length === 1);
+}
+
+// Nothing at all: no session, no workspace, no clipboard.
+{
+  setClipboard({});
+  check('no host surface reports none', draftInNewSession({ get: () => undefined }, 'z') === 'none');
+}
+
+check('fillComposerDraft never starts a session', (() => {
+  const host = hostStub();
+  setClipboard({});
+  fillComposerDraft(host.ctx, 'w');
+  return host.uiWorkspace.startSessionCalls === 0;
+})());
 
 // --- 4. both languages carry the new keys -------------------------------
 for (const key of ['batchUpdate', 'batchUpdateHint', 'batchUpdateSent', 'batchUpdateDraft', 'batchUpdateEmpty', 'batchUpdatePrompt', 'batchUpdateProfile']) {
@@ -107,19 +176,21 @@ for (const key of ['batchUpdate', 'batchUpdateHint', 'batchUpdateSent', 'batchUp
   check(`i18n key ${key} in zh+en`, hits === 2, `count=${hits}`);
 }
 
-// --- 5. wiring: the buttons exist and the batch path sends --------------
+// --- 5. wiring: the buttons exist and the batch path opens a session ----
 check('reminder panel has the batch button',
   /onClick: updateAll,\s*\n\s*\}, t\('batchUpdate'\)\)/.test(clientSource));
-check('reminder panel batch path sends, not just drafts',
+check('reminder panel batch path drafts into a new session',
   /const outcome = sendAi\(buildBatchPrompt\(pending, t, state\?\.profileDir\)\)/.test(clientSource));
 check('settings page has the batch button',
   /\$\{t\('batchUpdate'\)\} \(\$\{actionable\.length\}\)/.test(clientSource));
-check('settings page batch path sends',
+check('settings page batch path drafts into a new session',
   /const outcome = sendAi\(buildBatchPrompt\(actionable, t, data\?\.profileDir\)\)/.test(clientSource));
-check('batch button is wired to sendComposerText',
-  /const sendAi = \(text\) => sendComposerText\(ctx, text\);/.test(clientSource));
+check('batch button is wired to draftInNewSession',
+  /const sendAi = \(text\) => draftInNewSession\(ctx, text\);/.test(clientSource));
 check('both slots receive sendAi',
   (clientSource.match(/inject: \(\) => \(\{ rpcCall, t, askAi, sendAi \}\)/g) ?? []).length === 2);
+check('the old submit path is gone',
+  !/sendComposerText/.test(clientSource));
 
 const failed = results.filter((ok) => !ok).length;
 console.log(`\n${results.length - failed}/${results.length} passed`);

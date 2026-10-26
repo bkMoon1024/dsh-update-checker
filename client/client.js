@@ -80,8 +80,8 @@ window.__ModuleLoader__.load({
         updateAction: '让 AI 更新',
         askAiPrompt: '帮我更新 %s 插件',
         batchUpdate: '一键更新',
-        batchUpdateHint: '把检测到的更新整理成一条指令发给 AI，由它逐个执行',
-        batchUpdateSent: '已把更新清单发给 AI',
+        batchUpdateHint: '新建一个对话，把更新清单填进输入框，由你确认后发送',
+        batchUpdateSent: '已新建对话并填好更新清单',
         batchUpdateDraft: '已填入输入框，按发送即可',
         batchUpdateEmpty: '当前没有可更新的插件',
         batchUpdatePrompt: '帮我更新这些检测到新版本的 DSH 插件，逐个更新，完成后告诉我每个插件的结果。',
@@ -167,8 +167,8 @@ window.__ModuleLoader__.load({
         updateAction: 'Ask AI to update',
         askAiPrompt: 'Please update the %s plugin',
         batchUpdate: 'Update all',
-        batchUpdateHint: 'Hands every detected update to the AI as one request',
-        batchUpdateSent: 'Sent the update list to the AI',
+        batchUpdateHint: 'Opens a new conversation with the update list in the composer, for you to send',
+        batchUpdateSent: 'Opened a new conversation with the update list filled in',
         batchUpdateDraft: 'Filled the composer — press send',
         batchUpdateEmpty: 'Nothing to update right now',
         batchUpdatePrompt: 'Please update these DSH plugins that have newer versions. Update them one by one and report the result for each.',
@@ -646,15 +646,29 @@ window.__ModuleLoader__.load({
      * mounted. `setDraft` / `submit` are the host's own input actions, so a
      * plugin hands text over instead of driving the editor itself.
      */
-    function resolveInputActions(ctx) {
+    function resolveUiSession(ctx) {
       let uiSession;
       try {
         uiSession = typeof ctx.get === 'function' ? ctx.get('uiSession') : undefined;
       } catch {
         uiSession = undefined;
       }
-      uiSession = uiSession ?? ctx.uiSession;
-      return uiSession?.adapter?.current?.getSnapshot?.()?.props?.inputActions;
+      return uiSession ?? ctx.uiSession;
+    }
+
+    function resolveInputActions(ctx) {
+      return resolveUiSession(ctx)?.adapter?.current?.getSnapshot?.()?.props?.inputActions;
+    }
+
+    /** Workspace navigation, which owns the "new conversation" entry point. */
+    function resolveWorkspaceNavigation(ctx) {
+      let navigation;
+      try {
+        navigation = typeof ctx.get === 'function' ? ctx.get('uiWorkspace') : undefined;
+      } catch {
+        navigation = undefined;
+      }
+      return navigation ?? ctx.uiWorkspace;
     }
 
     function copyToClipboard(text) {
@@ -688,27 +702,68 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Hand the request to the AI and press send: 'sent' when the composer took
-     * the text and submitted it, 'draft' when it only took the text (no submit
-     * channel), 'clipboard' / 'none' when there was no composer at all.
+     * Start a fresh conversation and leave the text in its composer, unsent.
+     *
+     * `uiWorkspace.startSession()` only kicks off creation: the new session is
+     * mounted asynchronously, so the composer that can take the draft does not
+     * exist yet when it returns. We therefore watch the main binding until it
+     * points at a different session that has input actions, then fill it.
+     *
+     * Returns 'session' when a new conversation was started (the draft lands as
+     * soon as its composer mounts), and falls back to the current composer, the
+     * clipboard, or nothing when no new conversation can be started.
      */
-    function sendComposerText(ctx, text) {
-      const actions = resolveInputActions(ctx);
-      if (!actions || typeof actions.setDraft !== 'function') {
-        return copyToClipboard(text) ? 'clipboard' : 'none';
+    function draftInNewSession(ctx, text) {
+      const navigation = resolveWorkspaceNavigation(ctx);
+      const source = resolveUiSession(ctx)?.adapter?.current;
+      const start = navigation?.startSession;
+      if (typeof start !== 'function' || typeof source?.getSnapshot !== 'function') {
+        return fillComposerDraft(ctx, text);
       }
+      const before = source.getSnapshot()?.key;
+      let settled = false;
+      let unsubscribe = () => {};
+      let timer = null;
+      const settle = (outcome) => {
+        if (settled) return outcome;
+        settled = true;
+        try { unsubscribe(); } catch { /* already gone */ }
+        if (timer !== null) clearTimeout(timer);
+        return outcome;
+      };
+      // The new session's binding carries its own input actions; the old one's
+      // must not be reused, or the draft would land in the previous chat.
+      const fillIfReady = () => {
+        const snapshot = source.getSnapshot?.();
+        if (!snapshot || snapshot.key === before) return false;
+        const actions = snapshot.props?.inputActions;
+        if (!actions || typeof actions.setDraft !== 'function') return false;
+        try {
+          actions.setDraft(text);
+        } catch {
+          return settle(copyToClipboard(text) ? 'clipboard' : 'none');
+        }
+        return settle('session');
+      };
       try {
-        actions.setDraft(text);
+        const started = start.call(navigation);
+        if (started && typeof started.catch === 'function') started.catch(() => settle('none'));
       } catch {
-        return copyToClipboard(text) ? 'clipboard' : 'none';
+        return fillComposerDraft(ctx, text);
       }
-      if (typeof actions.submit !== 'function') return 'draft';
+      if (fillIfReady()) return 'session';
       try {
-        actions.submit();
-        return 'sent';
+        unsubscribe = source.subscribe?.(() => { fillIfReady(); }) ?? (() => {});
       } catch {
-        return 'draft';
+        /* no subscription channel: the timeout below still covers us */
       }
+      timer = setTimeout(() => {
+        if (settled) return;
+        copyToClipboard(text);
+        settle('clipboard');
+      }, 10000);
+      timer.unref?.();
+      return 'session';
     }
 
     /** Rows whose upstream is ahead: the ones a batch update should cover. */
@@ -1004,12 +1059,11 @@ window.__ModuleLoader__.load({
         if (outcome !== 'none') setOpen(false);
       };
 
-      // One request for the whole pending set. 'sent' / 'draft' both leave the
-      // outcome visible in the composer, so the panel can close; a clipboard or
-      // missing-session outcome has to stay on screen to be noticed.
+      // One request for the whole pending set, into a fresh conversation: the
+      // user asked for a draft they send themselves, so nothing is submitted.
       const updateAll = () => {
         const outcome = sendAi(buildBatchPrompt(pending, t, state?.profileDir));
-        if (outcome === 'sent' || outcome === 'draft') {
+        if (outcome === 'session' || outcome === 'draft') {
           setOpen(false);
           return;
         }
@@ -1161,17 +1215,17 @@ window.__ModuleLoader__.load({
       const actionable = rows.filter(isActionable);
 
       // Same handover as the per-row button, but for every actionable row at
-      // once — and this one sends, since "one click" is the point.
+      // once — into a new conversation, still unsent.
       const onBatchUpdate = () => {
         if (actionable.length === 0) {
           setNotice(t('batchUpdateEmpty'));
           return;
         }
         const outcome = sendAi(buildBatchPrompt(actionable, t, data?.profileDir));
-        setNotice(outcome === 'sent' ? t('batchUpdateSent')
+        setNotice(outcome === 'session' ? t('batchUpdateSent')
           : outcome === 'draft' ? t('batchUpdateDraft')
             : outcome === 'clipboard' ? t('askAiCopied') : t('askAiNoSession'));
-        if (outcome === 'sent' || outcome === 'draft') {
+        if (outcome === 'session' || outcome === 'draft') {
           try { close?.(); } catch { /* panel already gone */ }
         }
       };
@@ -2289,10 +2343,11 @@ window.__ModuleLoader__.load({
           throw new Error(result?.error?.message || 'rpc failed');
         };
 
-        // Shared by the settings page and the footer panel: both hand the same
-        // update request to the composer; the batch button also presses send.
+        // Shared by the settings page and the footer panel: the per-row button
+        // fills the current composer, the batch button opens a new conversation
+        // and fills that one instead. Neither presses send.
         const askAi = (text) => fillComposerDraft(ctx, text);
-        const sendAi = (text) => sendComposerText(ctx, text);
+        const sendAi = (text) => draftInNewSession(ctx, text);
 
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
@@ -2312,7 +2367,7 @@ window.__ModuleLoader__.load({
           inject: () => ({ rpcCall, t, askAi, sendAi }),
         }, UpdateReminder));
       },
-      _internals: { parseMarkdownBody, parseInline, fillComposerDraft, sendComposerText, buildBatchPrompt, isActionable, safeHref },
+      _internals: { parseMarkdownBody, parseInline, fillComposerDraft, draftInNewSession, buildBatchPrompt, isActionable, safeHref },
     };
   },
 });
