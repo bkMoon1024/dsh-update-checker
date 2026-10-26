@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/daha1216/dsh-update-checker?color=4d6bfe.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](./LICENSE)
 [![DSH plugin](https://img.shields.io/badge/DSH-plugin-4A90D9.svg?style=flat-square)](https://github.com/topics/dsh-plugin)
-[![Tests Passing](https://img.shields.io/badge/tests-190%2B%20passed-brightgreen.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker)
+[![Tests Passing](https://img.shields.io/badge/tests-250%2B%20passed-brightgreen.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker)
 [![Node >=22](https://img.shields.io/badge/node-%E2%89%A522-339933.svg?style=flat-square)](https://nodejs.org)
 
 [中文](./README.md) · **English**
@@ -32,7 +32,7 @@ As the DeepSeek Harness (DSH) plugin ecosystem expands, third-party extensions�
 | Sidebar Reminder Popup (Background Scheduler) | Settings View: Plugin Updates Center |
 | :---: | :---: |
 | <img src="./assets/reminder-popup.png" width="450" alt="Sidebar badge and pending update popup" /> | <img src="./assets/settings-panel.png" width="470" alt="Full-view Plugin Updates settings panel" /> |
-| *Background checks run quietly. When updates are found, an unobtrusive badge appears in the bottom sidebar. Click to view pending versions, trigger AI updates, or ignore releases.* | *One-click full scan with instant status filtering (All / Updates / Latest / Local), configurable polling intervals, and rich Markdown changelog rendering.* |
+| *Background checks run quietly. When updates are found, an unobtrusive badge appears in the bottom sidebar. Click to view pending versions, trigger AI updates, or ignore releases.* | *One-click full scan with separate status and install-source filters; the background reminder collapses to a single row with settings on demand, and release notes render as rich Markdown.* |
 
 </div>
 
@@ -46,7 +46,8 @@ As the DeepSeek Harness (DSH) plugin ecosystem expands, third-party extensions�
   - **npm SemVer Specs** (`^1.2.3`, `~0.1.6`, exact versions): Queries the official npm registry with seamless npmmirror fallback.
   - **GitHub Remote References** (`github:owner/repo#tag`): Compares against the latest GitHub Release tags; branch or commit references are clearly classified as "tracking branches".
   - **Local Development Installs** (`file:` / `link:`): If the project points to an upstream GitHub repository, it compares versions and labels them as "local ahead", "local behind", or "in sync with upstream".
-- **Granular Status & Filter Chips**: Provides filter chips for `All`, `Updates Available`, `Latest`, `Local`, and `Needs Attention`, with quick sorting by status or name.
+- **Granular Status & Filter Chips**: Status filters for `All`, `Updates Available`, `Latest`, and `Needs Attention`, plus a **separate** install-source dropdown (npm / GitHub / local) — a local checkout can trail upstream too, so source is not a status. Sort by status or name.
+- **Compact Rows**: Each row merges name, status and version onto one line, clamps the description to a single line, and moves the install spec and release notes into the expander — noticeably more plugins per screen (since v0.7.0).
 
 ### 2. 🔔 Background Scheduler & Non-Intrusive Sidebar Alerts
 - **Configurable Polling Intervals**: Set your preferred background check frequency in Settings (every 30 mins / 1 hour / 2 hours / 6 hours, or custom minutes).
@@ -60,7 +61,7 @@ As the DeepSeek Harness (DSH) plugin ecosystem expands, third-party extensions�
 ### 3. 🤖 AI-Assisted Updates: "Update with AI" and "Update all"
 - **Strict Read-Only Guarantee**: The plugin **never runs package managers or alters `node_modules` and config files on its own**.
 - **One-Click Agent Delegation**: Clicking "Update with AI" fills the chat input with a standardized prompt (e.g., `Help me update the billion-context plugin`). If no session is active or focused, it cleanly falls back to copying the instruction to your clipboard, allowing the agent to follow best practices in an isolated sandbox.
-- **Update All (batch)**: When several plugins are outdated, an "Update all" button appears in the popup footer and in the settings page header. One click turns the whole pending list into a single prompt **and sends it** — the list carries each plugin name, installed → latest version, install spec (`file:` / `link:` / `github:` / npm) and the profile name, so the agent can update them one by one and report back. The per-row button only fills the composer; the batch button fills and submits. With no open session it falls back to the clipboard and says so.
+- **Update All (batch)**: When several plugins are outdated, an "Update all" button appears in the popup footer and in the settings page header. One click **opens a new conversation and fills its composer with the whole pending list — it does not send**. The list carries each plugin name, installed → latest version, install spec (`file:` / `link:` / `github:` / npm) and the profile name, so the agent can update them one by one and report back. Sending stays your call; if a new conversation cannot be created it falls back to the current composer, then to the clipboard and says so.
 
 ### 4. 📖 Deep Changelog Parsing (Release Notes Diff)
 - **Range-Aware Release Aggregation**: Aggregates all Release entries between the currently installed version and the latest stable release.
@@ -194,6 +195,19 @@ npm run test:e2e
 ---
 
 ## 📝 Changelog
+
+### v0.7.0 (2026-10-26)
+- **Settings page rebuilt around updates, with configuration folded away**: the rarely-touched background settings no longer own the first screen, and long descriptions no longer crowd out the plugin list.
+  - **Reminder collapsed to one row**: switch, current state and interval sit on a single line (`Auto-check · On · every 2 hours`); the interval selector, its explanation and save errors live behind a "Settings" expander.
+  - **Slimmer rows**: name, status and version share one line, the description clamps to a single line (full text on hover, or expand), and the install spec and release notes move into the expander.
+  - **Status and source are separate filters**: install source (npm / GitHub / local) left the status chips for its own dropdown, listing only the sources actually installed. "Local" and "updates available" sat in one row as if mutually exclusive, yet a local checkout can trail upstream just as well.
+  - **Buttons explain themselves**: a permanent line under "Update all" says it opens a new conversation with the list filled in, instead of hiding that in a tooltip.
+- **Local-behind rows gained the update button**: `local-behind` (`file:` / `link:` install with a newer upstream) appeared under "Updates Available" and in the batch list but had no per-row "Update with AI" button. Row buttons and the batch list now share one `isActionable` predicate.
+- **Healthy states quieted down**: "Latest" and friends moved from green to neutral; red is reserved for rows that actually failed.
+- **Tests**: `test/render-harness.mjs` seeds follow the new `sourceFilter` / `expanded` state, and the row-button assertion now locks the `isActionable` gate.
+
+### v0.6.0 (2026-10-26)
+- **"Update all" now opens a new conversation and does not send**: it used to splice the whole list into the current session's prompt and press send for you. It now opens a **new conversation**, fills its composer with the list, and **does not send** — timing stays yours. Because it targets the new conversation's composer rather than the active one, it cannot pollute the chat you are in; if that composer has not mounted yet it waits up to 10 seconds instead of falling back to the old session. When no new conversation can be created it falls back to the current composer, then the clipboard.
 
 ### v0.3.5 (2026-10-19)
 - **Fixed Timer Rescheduling Race**: Eliminated duplicate timer creation when changing the polling interval during an active scan.

@@ -106,8 +106,10 @@ const Page = settings.comp;
 const pageInject = settings.meta.inject();
 const t = pageInject.t;
 
-// Page state order: running, data, loadingCache, error, notice, filter, sortMode, openNames
-const pageText = seedStates([false, { at: new Date().toISOString(), rows: mockRows, stats: { requests: 3, cacheHits: 1 } }, false, '', '', 'all', 'status', new Set()],
+// Page state order: running, data, loadingCache, error, notice, filter,
+// sortMode, openNames, sourceFilter
+const PAGE_SEED = (rows = mockRows, extra = {}) => [false, { at: new Date().toISOString(), rows, stats: { requests: 3, cacheHits: 1 }, ...extra }, false, '', '', 'all', 'status', new Set(), 'all'];
+const pageText = seedStates(PAGE_SEED(),
   () => toText(createElement(Page, { rpcCall: rpc, t, askAi: pageInject.askAi })).join(' | '));
 console.log('--- RENDERED PAGE ---');
 console.log(pageText);
@@ -122,9 +124,9 @@ if (/[ÃÂ�]/.test(pageText)) throw new Error('page text has mojibake');
 
 // Reminder controls lead the page: once the reminder state resolves, the
 // settings card renders before the plugin list. The seeds after Page's own
-// eight states feed ReminderSettings (state, saving, failed).
-const orderedText = seedStates([false, { at: new Date().toISOString(), rows: mockRows, stats: { requests: 3, cacheHits: 1 } }, false, '', '', 'all', 'status', new Set(),
-  { config: { enabled: true, intervalMinutes: 60 }, lastCheckAt: new Date().toISOString(), lastError: null }, false, false],
+// nine states feed ReminderSettings (state, saving, failed, expanded).
+const orderedText = seedStates([...PAGE_SEED(),
+  { config: { enabled: true, intervalMinutes: 60 }, lastCheckAt: new Date().toISOString(), lastError: null }, false, false, false],
   () => toText(createElement(Page, { rpcCall: rpc, t, askAi: pageInject.askAi })).join(' | '));
 const reminderIndex = orderedText.indexOf('后台提醒');
 const listIndex = orderedText.indexOf('dsh-update-checker');
@@ -176,10 +178,13 @@ const rail = seedStates([pendingPayload, false, null, false],
   () => toText(createElement(Reminder, { wide: false, ...footerInject })).join('')).trim();
 if (rail !== '') throw new Error('rail entry must stay icon-only, got: ' + JSON.stringify(rail));
 
-// PluginRow action: an update row offers the button, an up-to-date row does not.
+// PluginRow action: every actionable row offers the button — an npm update and
+// a local checkout that trails upstream alike, since both are listed under
+// "有更新". Up-to-date rows do not.
 const rowSource = src.slice(src.indexOf('function PluginRow'), src.indexOf('function Skeleton'));
 if (!rowSource.includes('onAskAi')) throw new Error('PluginRow lost its onAskAi wiring');
-if (!/isUpdate \? h\('button'/.test(rowSource)) throw new Error('PluginRow update button is not gated on status=update');
+if (!/const canUpdate = isActionable\(row\);/.test(rowSource)) throw new Error('PluginRow must gate its action on isActionable');
+if (!/canUpdate \? h\('button'/.test(rowSource)) throw new Error('PluginRow update button is not gated on an actionable row');
 if (!rowSource.includes("t('updateAction')")) throw new Error('PluginRow update button label missing');
 console.log('plugin row action: gated on update status, label =', t('updateAction'));
 
@@ -244,7 +249,7 @@ const evilRows = [
   { name: 'evil-release-url', status: 'update', installed: '1.0.0', latest: '1.0.2', spec: '^1', description: '', error: null, kind: 'github', repoUrl: '', pageUrl: '', homepage: '', releasesSource: 'api',
     releases: [{ tag: 'v1.0.2', date: '', url: 'javascript:alert(2)', body: 'text' }] },
 ];
-const evilSeeds = [false, { at: new Date().toISOString(), rows: evilRows, stats: { requests: 2, cacheHits: 0 } }, false, '', '', 'all', 'status', new Set(evilRows.map((r) => r.name))];
+const evilSeeds = [false, { at: new Date().toISOString(), rows: evilRows, stats: { requests: 2, cacheHits: 0 } }, false, '', '', 'all', 'status', new Set(evilRows.map((r) => r.name)), 'all'];
 const hrefs = seedStates(evilSeeds, () => collectHrefs(createElement(Page, { rpcCall: rpc, t, askAi: pageInject.askAi })));
 const evilFlat = seedStates(evilSeeds, () => toText(createElement(Page, { rpcCall: rpc, t, askAi: pageInject.askAi })).join(' '));
 const unsafe = hrefs.filter((href) => !/^https?:\/\//i.test(href));

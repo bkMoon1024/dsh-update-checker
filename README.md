@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/daha1216/dsh-update-checker?color=4d6bfe.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](./LICENSE)
 [![DSH plugin](https://img.shields.io/badge/DSH-plugin-4A90D9.svg?style=flat-square)](https://github.com/topics/dsh-plugin)
-[![Tests Passing](https://img.shields.io/badge/tests-190%2B%20passed-brightgreen.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker)
+[![Tests Passing](https://img.shields.io/badge/tests-250%2B%20passed-brightgreen.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker)
 [![Node >=22](https://img.shields.io/badge/node-%E2%89%A522-339933.svg?style=flat-square)](https://nodejs.org)
 
 **中文** · [English](./README.en.md)
@@ -32,7 +32,7 @@
 | 侧边栏常驻提醒浮层（后台智能巡检） | 设置中心「插件更新」全景管理面板 |
 | :---: | :---: |
 | <img src="./assets/reminder-popup.png" width="450" alt="侧边栏角标与待更新浮层气泡" /> | <img src="./assets/settings-panel.png" width="470" alt="设置中心插件更新全景面板" /> |
-| *后台定时巡检静默运行，发现新版本时在侧边栏底部展示数量角标，点击唤起交互气泡，支持一键「让 AI 更新」与版本忽略* | *一键全景扫描，按状态即时筛选（全部/有更新/最新/本地），可视化配置巡检频率，直观浏览 Release 变更日志* |
+| *后台定时巡检静默运行，发现新版本时在侧边栏底部展示数量角标，点击唤起交互气泡，支持一键「让 AI 更新」与版本忽略* | *一键全景扫描，按状态与安装来源即时筛选，后台巡检收成一行、按需展开配置，直观浏览 Release 变更日志* |
 
 </div>
 
@@ -46,7 +46,8 @@
   - **npm 版本依赖**（`^1.2.3`、`~0.1.6`、精确版本）：优先查询 npm 官方镜像源，并支持 npmmirror 智能回退。
   - **GitHub 远程引用**（`github:owner/repo#tag`）：精准比对 GitHub Releases 最新稳定版本；未写 `#ref` 时用已装版本与最新 tag 比较，落后即判「有更新」，版本号无法排序时才判「跟踪分支」（v0.4.1 起）。
   - **本地开发安装**（`file:` / `link:`）：若项目声明了 GitHub 仓库，自动比对本地与上游差异，清晰标明「本地领先」、「本地落后」或「与上游一致」。
-- **状态细分与统计筛选**：提供 `全部`、`有更新`、`已是最新`、`本地`、`需关注` 等状态过滤 Chips，并支持一键按状态或名称排序。
+- **状态细分与统计筛选**：状态筛选提供 `全部`、`有更新`、`已是最新`、`需关注`；安装来源（npm / GitHub / 本地）是另一个独立下拉筛选，因为本地检出同样可能落后上游。列表支持一键按状态或名称排序。
+- **紧凑列表**：每行合并名称、状态与版本，介绍默认一行，安装 spec 与发行说明展开查看——一屏能看到更多插件（v0.7.0 起）。
 
 ### 2. 🔔 智能后台调度巡检与侧边栏实时气泡
 - **灵活的后台巡检机制**：支持在设置中心自定义巡检频率（每 30 分钟 / 1 小时 / 2 小时 / 6 小时或自定义分钟数）。
@@ -202,6 +203,16 @@ npm run test:e2e
 ---
 
 ## 📝 更新日志
+
+### v0.7.0（2026-10-26）
+- **设置页改为「更新优先、设置收起」**：低频的后台设置不再占满首屏，插件列表的信息密度也不再被长介绍挤掉。四件事：
+  - **后台提醒收成一条**：开关、当前状态与检查频率并排一行（`自动检查 · 已开启 · 每 2 小时`），频率选择器、说明与保存错误收进「设置」展开区。日常只看不改的人，一屏就能扫完。
+  - **插件行瘦身**：名称、状态、版本合并进同一行，介绍默认只留一行（悬停有完整文本，展开可见全文），安装 spec 与发行说明移进展开区。同屏可看的插件明显变多。
+  - **状态与来源分开筛**：安装来源（npm / GitHub / 本地）从状态 Chips 里拆出来，改为独立下拉框，只列出当前实际装了的来源。原先「本地」与「有更新」混在一排，读起来像互斥，而本地检出同样可能落后上游。
+  - **按钮说人话**：「一键更新」下方常驻一行「新建对话并填入更新清单，由你发送」，不再只藏在悬停提示里。
+- **本地落后行补上更新按钮**：`local-behind`（`file:` / `link:` 本地安装、上游有新版）此前会进「有更新」筛选与批量清单，却没有行内的「让 AI 更新」按钮。现在行内按钮与批量清单共用同一个 `isActionable` 判定，两类可更新行操作一致。
+- **健康状态安静下来**：「已是最新」等正常状态从绿色改为中性色，红色只留给真正失败的行；一眼看过去，需要处理的才显眼。
+- **测试**：`test/render-harness.mjs` 的状态种子随新增的 `sourceFilter` / `expanded` 更新，行内按钮断言改为锁定 `isActionable` 判定。
 
 ### v0.6.0（2026-10-26）
 - **「一键更新」改为新建对话、只填不发**：此前点一下就把整份清单拼成提示词塞进当前会话并直接发送，等于替你按了发送键。现在改为**新建一个对话**、把清单填进它的输入框，**不发送**——发送时机由你决定。填的是新会话的输入框而不是当前那个，所以不会污染正在进行的对话；新会话的 composer 尚未挂载时，等它就绪再填（最长 10 秒），期间不会退而填到旧会话。新会话无法创建时回退到当前输入框，再回退剪贴板。

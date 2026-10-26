@@ -60,8 +60,16 @@ window.__ModuleLoader__.load({
         tagOnlyNote: '该仓库没有提供 Release 说明正文，以下仅为版本标签。',
         filterAll: '全部',
         filterUpdates: '有更新',
-        filterLocal: '本地',
         filterIssues: '需关注',
+        filterSource: '来源',
+        filterSourceAll: '全部来源',
+        filterSourceLocal: '本地',
+        pendingUpdates: '有 %d 个插件可以更新',
+        batchUpdateHintShort: '新建对话并填入更新清单，由你发送',
+        reminderStatusOn: '已开启',
+        reminderStatusOff: '已关闭',
+        reminderConfigure: '设置',
+        reminderCollapse: '收起',
         expandAll: '展开全部',
         collapseAll: '收起全部',
         sortByStatus: '按状态',
@@ -103,6 +111,7 @@ window.__ModuleLoader__.load({
         reminderNoToken: 'GitHub 匿名限额较低，配置 token 可减少失败',
         reminderIgnored: '已忽略，出现新版本时会再次提醒',
         reminderSection: '后台提醒',
+        reminderAutoCheck: '自动检查',
         reminderEnabled: '定时检查插件更新',
         reminderEnabledHint: '开启后会在后台定期检查，发现新版本时在左下角提醒。',
         reminderInterval: '检查频率',
@@ -147,8 +156,16 @@ window.__ModuleLoader__.load({
         tagOnlyNote: 'No release notes published upstream; tags only.',
         filterAll: 'All',
         filterUpdates: 'Updates',
-        filterLocal: 'Local',
         filterIssues: 'Attention',
+        filterSource: 'Source',
+        filterSourceAll: 'All sources',
+        filterSourceLocal: 'Local',
+        pendingUpdates: '%d plugin updates available',
+        batchUpdateHintShort: 'Opens a new conversation with the list filled in — you send it',
+        reminderStatusOn: 'On',
+        reminderStatusOff: 'Off',
+        reminderConfigure: 'Settings',
+        reminderCollapse: 'Done',
         expandAll: 'Expand all',
         collapseAll: 'Collapse all',
         sortByStatus: 'By status',
@@ -190,6 +207,7 @@ window.__ModuleLoader__.load({
         reminderNoToken: 'Anonymous GitHub quota is low — set a token to reduce failures',
         reminderIgnored: 'Dismissed; it returns when a newer version appears',
         reminderSection: 'Background reminder',
+        reminderAutoCheck: 'Auto check',
         reminderEnabled: 'Check for plugin updates on a schedule',
         reminderEnabledHint: 'Checks in the background and shows a reminder in the bottom-left corner when updates appear.',
         reminderInterval: 'Frequency',
@@ -220,9 +238,11 @@ window.__ModuleLoader__.load({
 
     const STATUS_TONE = {
       update: 'brand',
-      latest: 'success',
-      'local-latest': 'success',
-      'local-ahead': 'success',
+      // An up-to-date plugin is the resting state, not an achievement: keeping
+      // every healthy row green turns the list into a wall of success color.
+      latest: 'neutral',
+      'local-latest': 'neutral',
+      'local-ahead': 'neutral',
       local: 'neutral',
       branch: 'neutral',
       'local-behind': 'warn',
@@ -255,14 +275,13 @@ window.__ModuleLoader__.load({
       local: 6,
     };
 
-    /** Status → filter chip group ('branch' stays ungrouped, visible under All). */
+    /** Status → filter chip group ('branch' and 'local' show under All only). */
     const FILTER_OF = {
       update: 'updates',
       'local-behind': 'updates',
       latest: 'current',
       'local-latest': 'current',
       'local-ahead': 'current',
-      local: 'local',
       error: 'issues',
       unknown: 'issues',
     };
@@ -803,18 +822,22 @@ window.__ModuleLoader__.load({
       const linkUrl = safeHref(row.repoUrl || row.pageUrl || row.homepage || '');
       const sourceLabel = row.kind === 'npm' ? 'npm' : row.kind === 'github' ? 'GitHub' : row.kind === 'file' ? t('localPath') : (row.kind || 'link');
       const tone = STATUS_TONE[row.status] ?? 'neutral';
-      const isUpdate = row.status === 'update';
+      // A local checkout that trails upstream needs the same action as an npm
+      // row with a newer version; gating on `update` alone left those rows with
+      // no button at all while still listing them under "有更新".
+      const canUpdate = isActionable(row);
       const notesId = `dsh-uc-notes-${row.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+      const hasDetails = notes || row.spec || row.description;
 
       return h('div', {
         className: 'dsh-uc-card',
         'data-open': open ? 'true' : 'false',
         'data-status': row.status,
-        'data-has-update': isUpdate ? 'true' : 'false',
+        'data-has-update': canUpdate ? 'true' : 'false',
       },
         h('div', {
-          className: `dsh-uc-row${notes ? ' dsh-uc-row-clickable' : ''}`,
-          onClick: notes ? () => onToggle(row.name) : undefined,
+          className: `dsh-uc-row${hasDetails ? ' dsh-uc-row-clickable' : ''}`,
+          onClick: hasDetails ? () => onToggle(row.name) : undefined,
         },
           h('div', { className: 'dsh-uc-icon-box', 'data-tone': tone },
             h(SourceIcon, { kind: row.kind }),
@@ -823,9 +846,8 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dsh-uc-row-title-row' },
               h('span', { className: 'dsh-uc-row-title' }, row.name),
               h(Badge, { status: row.status, label: t(STATUS_KEY[row.status] ?? 'statusUnknown') }),
+              h('span', { className: 'dsh-uc-row-version' }, renderVersionLine(row, t)),
             ),
-            h('div', { className: 'dsh-uc-row-version' }, renderVersionLine(row, t)),
-            row.spec ? h('div', { className: 'dsh-uc-row-spec' }, row.spec) : null,
             row.description ? h('div', { className: 'dsh-uc-row-desc' }, row.description) : null,
             row.error ? h('div', { className: 'dsh-uc-row-err' },
               h(IconWarning, { size: 12 }),
@@ -833,7 +855,7 @@ window.__ModuleLoader__.load({
             ) : null,
           ),
           h('div', { className: 'dsh-uc-row-right' },
-            isUpdate ? h('button', {
+            canUpdate ? h('button', {
               type: 'button',
               className: 'dsh-uc-btn dsh-uc-btn-sm dsh-uc-row-update',
               title: t('askAiHint'),
@@ -847,7 +869,7 @@ window.__ModuleLoader__.load({
               title: linkUrl,
               onClick: (event) => event.stopPropagation(),
             }, `${sourceLabel} ↗`) : null,
-            notes ? h('button', {
+            hasDetails ? h('button', {
               type: 'button',
               className: 'dsh-uc-chevron-btn',
               'aria-expanded': open,
@@ -857,7 +879,7 @@ window.__ModuleLoader__.load({
             }, h(IconChevron)) : null,
           ),
         ),
-        notes ? h('div', {
+        hasDetails ? h('div', {
           id: notesId,
           className: 'dsh-uc-collapse',
           'data-open': open ? 'true' : 'false',
@@ -865,7 +887,14 @@ window.__ModuleLoader__.load({
         },
           h('div', { className: 'dsh-uc-collapse-inner' },
             h('div', { className: 'dsh-uc-details' },
-              everOpen || open ? h(ReleaseNotes, { row, t }) : null,
+              // The row already shows a one-line clamp, so the full text only
+              // mounts once the panel has actually been opened.
+              everOpen || open
+                ? (row.description ? h('div', { className: 'dsh-uc-detail-desc' }, row.description) : null) : null,
+              row.spec ? h('div', { className: 'dsh-uc-row-spec' }, row.spec) : null,
+              // A row can be expandable for its description alone; only an
+              // upstream with notes should claim there are notes to read.
+              notes && (everOpen || open) ? h(ReleaseNotes, { row, t }) : null,
             ),
           ),
         ) : null,
@@ -892,6 +921,7 @@ window.__ModuleLoader__.load({
       const [state, setState] = useState(null);
       const [saving, setSaving] = useState(false);
       const [failed, setFailed] = useState(false);
+      const [expanded, setExpanded] = useState(false);
 
       useEffect(() => {
         let alive = true;
@@ -921,7 +951,15 @@ window.__ModuleLoader__.load({
       const intervalOptions = INTERVAL_CHOICES.includes(config.intervalMinutes)
         ? INTERVAL_CHOICES
         : [...INTERVAL_CHOICES, config.intervalMinutes].sort((a, b) => a - b);
-      return h('div', { className: 'dsh-uc-card dsh-uc-settings-card' },
+      const intervalLabel = INTERVAL_LABEL_KEY[config.intervalMinutes]
+        ? t(INTERVAL_LABEL_KEY[config.intervalMinutes])
+        : t('everyCustom').replace('%d', String(config.intervalMinutes));
+      // The switch and the current frequency are what people come here to see;
+      // the picker, the explanation and the error text stay behind "设置".
+      return h('div', {
+        className: 'dsh-uc-card dsh-uc-settings-card',
+        'data-expanded': expanded ? 'true' : 'false',
+      },
         h('div', { className: 'dsh-uc-settings-head' },
           h('div', { className: 'dsh-uc-settings-title' }, t('reminderSection')),
           state.lastCheckAt
@@ -929,29 +967,43 @@ window.__ModuleLoader__.load({
               t('reminderLastAt').replace('%s', formatRelative(state.lastCheckAt, t)))
             : h('div', { className: 'dsh-uc-settings-meta' }, t('reminderNeverChecked')),
         ),
-        h('label', { className: 'dsh-uc-settings-row' },
-          h('input', {
-            type: 'checkbox',
-            className: 'dsh-uc-switch',
-            checked: config.enabled,
-            disabled: saving,
-            onChange: (event) => { void save({ enabled: event.target.checked }); },
-          }),
-          h('span', { className: 'dsh-uc-settings-label' },
-            t('reminderEnabled'),
-            h('span', { className: 'dsh-uc-settings-hint' }, t('reminderEnabledHint')),
+        h('div', { className: 'dsh-uc-settings-bar' },
+          h('label', { className: 'dsh-uc-settings-toggle' },
+            h('input', {
+              type: 'checkbox',
+              className: 'dsh-uc-switch',
+              checked: config.enabled,
+              disabled: saving,
+              onChange: (event) => { void save({ enabled: event.target.checked }); },
+            }),
+            h('span', { className: 'dsh-uc-settings-toggle-label' }, t('reminderAutoCheck')),
           ),
+          h('span', { className: 'dsh-uc-settings-summary' },
+            h('span', { 'data-on': config.enabled ? 'true' : 'false' },
+              config.enabled ? t('reminderStatusOn') : t('reminderStatusOff')),
+            config.enabled ? h('span', { className: 'dsh-uc-settings-summary-sep' }, '·') : null,
+            config.enabled ? h('span', null, intervalLabel) : null,
+          ),
+          h('button', {
+            type: 'button',
+            className: 'dsh-uc-btn dsh-uc-btn-ghost dsh-uc-btn-sm dsh-uc-settings-more',
+            'aria-expanded': expanded,
+            onClick: () => setExpanded(!expanded),
+          }, expanded ? t('reminderCollapse') : t('reminderConfigure')),
         ),
-        h('div', { className: 'dsh-uc-settings-row' },
-          h('span', { className: 'dsh-uc-settings-label' }, t('reminderInterval')),
-          h('select', {
-            className: 'dsh-uc-select',
-            value: String(config.intervalMinutes),
-            disabled: saving || !config.enabled,
-            onChange: (event) => { void save({ intervalMinutes: Number(event.target.value) }); },
-          }, intervalOptions.map((minutes) => h('option', { key: minutes, value: String(minutes) },
-            INTERVAL_LABEL_KEY[minutes] ? t(INTERVAL_LABEL_KEY[minutes]) : t('everyCustom').replace('%d', String(minutes))))),
-        ),
+        expanded ? h('div', { className: 'dsh-uc-settings-detail' },
+          h('div', { className: 'dsh-uc-settings-row' },
+            h('span', { className: 'dsh-uc-settings-label' }, t('reminderInterval')),
+            h('select', {
+              className: 'dsh-uc-select',
+              value: String(config.intervalMinutes),
+              disabled: saving || !config.enabled,
+              onChange: (event) => { void save({ intervalMinutes: Number(event.target.value) }); },
+            }, intervalOptions.map((minutes) => h('option', { key: minutes, value: String(minutes) },
+              INTERVAL_LABEL_KEY[minutes] ? t(INTERVAL_LABEL_KEY[minutes]) : t('everyCustom').replace('%d', String(minutes))))),
+          ),
+          h('div', { className: 'dsh-uc-settings-hint' }, t('reminderEnabledHint')),
+        ) : null,
         state.lastError ? h('div', { className: 'dsh-uc-settings-error' },
           `${t('reminderError')}: ${state.lastError}`) : null,
         failed ? h('div', { className: 'dsh-uc-settings-error' }, t('reminderSaveFailed')) : null,
@@ -1164,6 +1216,10 @@ window.__ModuleLoader__.load({
       const [filter, setFilter] = useState('all');
       const [sortMode, setSortMode] = useState('status');
       const [openNames, setOpenNames] = useState(() => new Set());
+      // Install source is a different axis from update status: a local checkout
+      // can also be behind upstream, so mixing both into one chip row made the
+      // counts read as if they excluded each other.
+      const [sourceFilter, setSourceFilter] = useState('all');
 
       useEffect(() => {
         let alive = true;
@@ -1236,7 +1292,6 @@ window.__ModuleLoader__.load({
         const groups = [
           { id: 'updates', label: t('filterUpdates'), count: 0 },
           { id: 'current', label: t('statusLatest'), count: 0 },
-          { id: 'local', label: t('filterLocal'), count: 0 },
           { id: 'issues', label: t('filterIssues'), count: 0 },
         ];
         for (const row of rows) {
@@ -1249,17 +1304,33 @@ window.__ModuleLoader__.load({
         return [{ id: 'all', label: t('filterAll'), count: rows.length }, ...groups.filter((item) => item.count > 0)];
       }, [rows, t]);
 
+      // Install-source options, derived from what is actually installed: a
+      // profile with no GitHub plugins should not offer an empty GitHub filter.
+      const sourceList = useMemo(() => {
+        const seen = new Map();
+        for (const row of rows) {
+          const kind = row.kind || 'other';
+          seen.set(kind, (seen.get(kind) ?? 0) + 1);
+        }
+        const labelOf = (kind) => (kind === 'npm' ? 'npm' : kind === 'github' ? 'GitHub' : kind === 'file' ? t('filterSourceLocal') : kind);
+        return [...seen.entries()]
+          .map(([kind, count]) => ({ id: kind, label: labelOf(kind), count }))
+          .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+      }, [rows, t]);
+
       // If the selected group vanished after a re-check (e.g. the only local-only
       // plugin gained an update), fall back to showing all rows instead of an
       // empty list that hides the newly available updates.
       const activeFilter = filter === 'all' || chipList.some((item) => item.id === filter) ? filter : 'all';
+      const activeSource = sourceFilter === 'all' || sourceList.some((item) => item.id === sourceFilter) ? sourceFilter : 'all';
 
       const visible = useMemo(() => rows
         .filter((row) => activeFilter === 'all' || FILTER_OF[row.status] === activeFilter)
+        .filter((row) => activeSource === 'all' || (row.kind || 'other') === activeSource)
         .sort((a, b) => {
           if (sortMode === 'name') return a.name.localeCompare(b.name);
           return (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99) || a.name.localeCompare(b.name);
-        }), [rows, activeFilter, sortMode]);
+        }), [rows, activeFilter, activeSource, sortMode]);
 
       const expandable = useMemo(() => visible.filter(hasNotesRow), [visible]);
       const allExpanded = expandable.length > 0 && expandable.every((row) => openNames.has(row.name));
@@ -1277,21 +1348,26 @@ window.__ModuleLoader__.load({
             h('p', { className: 'dsh-uc-header-desc' }, t('intro')),
           ),
           h('div', { className: 'dsh-uc-header-actions' },
-            actionable.length > 0 ? h('button', {
-              type: 'button',
-              className: 'dsh-uc-btn dsh-uc-btn-primary',
-              title: t('batchUpdateHint'),
-              onClick: onBatchUpdate,
-            }, `${t('batchUpdate')} (${actionable.length})`) : null,
-            h('button', {
-              type: 'button',
-              className: actionable.length > 0 ? 'dsh-uc-btn dsh-uc-btn-secondary' : 'dsh-uc-btn dsh-uc-btn-primary',
-              disabled: running,
-              onClick: run,
-            },
-              h(IconRefresh, { size: 14, className: running ? 'dsh-uc-spin' : undefined }),
-              running ? t('checking') : t('check'),
+            h('div', { className: 'dsh-uc-header-buttons' },
+              actionable.length > 0 ? h('button', {
+                type: 'button',
+                className: 'dsh-uc-btn dsh-uc-btn-primary',
+                title: t('batchUpdateHint'),
+                onClick: onBatchUpdate,
+              }, `${t('batchUpdate')} (${actionable.length})`) : null,
+              h('button', {
+                type: 'button',
+                className: actionable.length > 0 ? 'dsh-uc-btn dsh-uc-btn-secondary' : 'dsh-uc-btn dsh-uc-btn-primary',
+                disabled: running,
+                onClick: run,
+              },
+                h(IconRefresh, { size: 14, className: running ? 'dsh-uc-spin' : undefined }),
+                running ? t('checking') : t('check'),
+              ),
             ),
+            // The batch button never installs anything itself, so say what it
+            // does where it is, instead of leaving that to a hover title.
+            actionable.length > 0 ? h('div', { className: 'dsh-uc-header-hint' }, t('batchUpdateHintShort')) : null,
             data?.at ? h('div', {
               className: 'dsh-uc-header-meta',
               title: formatDate(data.at),
@@ -1352,6 +1428,15 @@ window.__ModuleLoader__.load({
             )),
           ),
           h('div', { className: 'dsh-uc-toolbar-actions' },
+            sourceList.length > 1 ? h('select', {
+              className: 'dsh-uc-select',
+              value: activeSource,
+              'aria-label': t('filterSource'),
+              onChange: (event) => setSourceFilter(event.target.value),
+            },
+              h('option', { value: 'all' }, t('filterSourceAll')),
+              sourceList.map((item) => h('option', { key: item.id, value: item.id }, `${item.label} (${item.count})`)),
+            ) : null,
             rows.length > 1 ? h('button', {
               type: 'button',
               className: 'dsh-uc-btn dsh-uc-btn-ghost dsh-uc-btn-sm',
@@ -1456,6 +1541,11 @@ window.__ModuleLoader__.load({
   gap: 6px;
   flex: none;
 }
+.dsh-uc-header-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .dsh-uc-header-meta {
   font-size: 11px;
   color: var(--dsw-alias-label-caption, rgba(128,128,128,0.75));
@@ -1464,6 +1554,15 @@ window.__ModuleLoader__.load({
 .dsh-uc-stale {
   color: var(--dsw-alias-state-warn-label, #e8590c);
   font-weight: 500;
+}
+
+/* What the batch button will hand over, stated in place. */
+.dsh-uc-header-hint {
+  max-width: 320px;
+  font-size: 11px;
+  line-height: 15px;
+  text-align: right;
+  color: var(--dsw-alias-label-caption, rgba(128,128,128,0.75));
 }
 
 /* Generic Button Primitives */
@@ -1725,6 +1824,13 @@ window.__ModuleLoader__.load({
   flex-wrap: wrap;
   line-height: 18px;
 }
+/* In the title row the version sits beside the name, so it takes the smaller
+   caption size and never forces the row onto a third line by itself. */
+.dsh-uc-row-title-row .dsh-uc-row-version {
+  font-size: 12px;
+  line-height: 16px;
+  min-width: 0;
+}
 .dsh-uc-version-label {
   font-size: 12px;
   color: var(--dsw-alias-label-caption, rgba(128,128,128,0.7));
@@ -1748,10 +1854,22 @@ window.__ModuleLoader__.load({
   word-break: break-all;
   line-height: 14px;
 }
+/* Full description inside the expanded panel, where the clamp does not apply. */
+.dsh-uc-detail-desc {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-secondary, rgba(128,128,128,0.85));
+}
 .dsh-uc-row-desc {
   font-size: 12px;
   color: var(--dsw-alias-label-secondary, rgba(128,128,128,0.85));
   line-height: 1.5;
+  /* One line by default: the description is context, not the thing being
+     scanned. The full text is one click away, with the release notes. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  overflow: hidden;
 }
 .dsh-uc-row-err {
   font-size: 12px;
@@ -2070,8 +2188,8 @@ window.__ModuleLoader__.load({
 .dsh-uc-settings-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px 18px;
+  gap: 10px;
+  padding: 12px 14px;
 }
 .dsh-uc-settings-head {
   display: flex;
@@ -2080,7 +2198,7 @@ window.__ModuleLoader__.load({
   gap: 12px;
 }
 .dsh-uc-settings-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--dsw-alias-label-primary, inherit);
 }
@@ -2088,6 +2206,51 @@ window.__ModuleLoader__.load({
   font-size: 11px;
   color: var(--dsw-alias-label-caption, rgba(128,128,128,0.65));
   font-variant-numeric: tabular-nums;
+}
+/* The always-visible line: switch, current state, and the disclosure. */
+.dsh-uc-settings-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dsh-uc-settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  flex: none;
+}
+.dsh-uc-settings-toggle-label {
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary, inherit);
+}
+.dsh-uc-settings-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, rgba(128,128,128,0.85));
+}
+.dsh-uc-settings-summary [data-on="true"] {
+  color: var(--dsw-alias-link, #4176e6);
+  font-weight: 500;
+}
+.dsh-uc-settings-summary-sep {
+  color: var(--dsw-alias-label-caption, rgba(128,128,128,0.6));
+}
+.dsh-uc-settings-more {
+  margin-left: auto;
+  flex: none;
+}
+.dsh-uc-settings-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: .5px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.2));
 }
 .dsh-uc-settings-row {
   display: flex;
