@@ -21,7 +21,7 @@ window.__ModuleLoader__.load({
   id: 'dsh-update-checker',
   factory(require) {
     const React = require('react');
-    const { useState, useEffect, useMemo } = React;
+    const { useState, useEffect, useMemo, useRef } = React;
     const h = React.createElement;
     const Fragment = React.Fragment;
 
@@ -740,46 +740,87 @@ window.__ModuleLoader__.load({
         return fillComposerDraft(ctx, text);
       }
       const before = source.getSnapshot()?.key;
-      let settled = false;
-      let unsubscribe = () => {};
+      let settledOutcome = null;
+      let unsubscribe = null;
       let timer = null;
+      let filling = false;
       const settle = (outcome) => {
-        if (settled) return outcome;
-        settled = true;
-        try { unsubscribe(); } catch { /* already gone */ }
-        if (timer !== null) clearTimeout(timer);
+        if (settledOutcome !== null) return settledOutcome;
+        settledOutcome = outcome;
+        const off = unsubscribe;
+        unsubscribe = null;
+        try { off?.(); } catch { /* already gone */ }
+        if (timer !== null) { clearTimeout(timer); timer = null; }
         return outcome;
       };
+      // The caller already told the user "new conversation + draft". If the
+      // session never materializes, keep the prompt reachable somewhere rather
+      // than dropping it silently.
+      const salvage = () => fillComposerDraft(ctx, text);
       // The new session's binding carries its own input actions; the old one's
       // must not be reused, or the draft would land in the previous chat.
       const fillIfReady = () => {
+        if (settledOutcome !== null || filling) return true;
         const snapshot = source.getSnapshot?.();
         if (!snapshot || snapshot.key === before) return false;
         const actions = snapshot.props?.inputActions;
         if (!actions || typeof actions.setDraft !== 'function') return false;
+        // A store may notify subscribers synchronously from setDraft; the
+        // re-entrant call must not fill the same prompt a second time.
+        filling = true;
+        let filled = true;
         try {
           actions.setDraft(text);
         } catch {
-          return settle(copyToClipboard(text) ? 'clipboard' : 'none');
+          filled = false;
+        } finally {
+          filling = false;
         }
-        return settle('session');
+        if (!filled) return settle(salvage()) !== null;
+        return settle('session') !== null;
       };
       try {
         const started = start.call(navigation);
-        if (started && typeof started.catch === 'function') started.catch(() => settle('none'));
+        if (started && typeof started.catch === 'function') {
+          started.catch((error) => {
+            if (settledOutcome !== null) return;
+            ctx?.logger?.warn?.('dsh-update-checker: startSession failed', error);
+            // Do not settle 'none': that cancels the 10s clipboard fallback
+            // and loses the prompt while the UI reports success.
+            settle(salvage());
+          });
+        }
       } catch {
         return fillComposerDraft(ctx, text);
       }
-      if (fillIfReady()) return 'session';
+      // Subscribe before the first fill attempt: when the new session mounts
+      // synchronously, fillIfReady settles before a real unsubscribe exists.
+      // The listener's unsubscribe is collected below, after subscribe returns.
       try {
-        unsubscribe = source.subscribe?.(() => { fillIfReady(); }) ?? (() => {});
+        unsubscribe = source.subscribe?.(() => { fillIfReady(); }) ?? null;
       } catch {
-        /* no subscription channel: the timeout below still covers us */
+        unsubscribe = null;
       }
+      if (settledOutcome !== null) {
+        // A synchronous listener settled during subscribe(), when `unsubscribe`
+        // was still null — release it here instead of leaking a listener that
+        // keeps firing for the rest of the page lifetime.
+        const off = unsubscribe;
+        unsubscribe = null;
+        try { off?.(); } catch { /* already gone */ }
+        return settledOutcome;
+      }
+      if (fillIfReady()) return settledOutcome ?? 'session';
       timer = setTimeout(() => {
-        if (settled) return;
-        copyToClipboard(text);
-        settle('clipboard');
+        if (settledOutcome !== null) return;
+        const copied = copyToClipboard(text);
+        if (!copied) {
+          // Nothing mounted and no clipboard: the prompt is lost, and the
+          // caller cannot observe this outcome. Leave a breadcrumb in the
+          // console instead of claiming a fallback that did not happen.
+          ctx?.logger?.warn?.('dsh-update-checker: draft not delivered; no session and no clipboard');
+        }
+        settle(copied ? 'clipboard' : 'none');
       }, 10000);
       timer.unref?.();
       return 'session';
@@ -1021,10 +1062,32 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false);
       const [elapsed, setElapsed] = useState(0);
       const [note, setNote] = useState('');
+      // Poll/timer cleanup: checkNow's 500ms ticker and 90s watchdog used to
+      // stay armed when the panel unmounted mid-scan (or when the RPC never
+      // settled), so every click added another interval for the page lifetime.
+      const mountedRef = useRef(true);
+      const tickerRef = useRef(null);
+      const watchdogRef = useRef(null);
+      // Token of the run that currently owns the button/timers. A run that
+      // timed out can settle after the user started another one; without this
+      // it would clear the newer run's ticker/watchdog and re-enable the
+      // button while it is still scanning.
+      const activeRunRef = useRef(null);
+      const sendingRef = useRef(false);
+      useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+          mountedRef.current = false;
+          activeRunRef.current = null;
+          if (tickerRef.current !== null) { clearInterval(tickerRef.current); tickerRef.current = null; }
+          if (watchdogRef.current !== null) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
+        };
+      }, []);
 
       const reload = async () => {
         try {
-          setState(await rpcCall('reminder.state', undefined));
+          const next = await rpcCall('reminder.state', undefined);
+          if (mountedRef.current) setState(next);
         } catch { /* the next poll retries */ }
       };
 
@@ -1070,7 +1133,9 @@ window.__ModuleLoader__.load({
       };
 
       const checkNow = async () => {
-        if (busy) return;
+        if (busy || activeRunRef.current !== null) return;
+        const runToken = Symbol('check');
+        activeRunRef.current = runToken;
         setBusy(true);
         setNote('');
         setElapsed(0);
@@ -1078,23 +1143,38 @@ window.__ModuleLoader__.load({
         // A scan can take tens of seconds on the anonymous GitHub quota, and
         // a button that only says "checking" reads as a dead button.
         const ticker = setInterval(() => {
+          if (!mountedRef.current) return;
           setElapsed(Math.round((Date.now() - startedAt) / 1000));
         }, 500);
+        tickerRef.current = ticker;
         // The scan itself is bounded; this covers a lost RPC response, which
         // would otherwise leave the button disabled for the whole session.
         const watchdog = setTimeout(() => {
+          if (activeRunRef.current !== runToken) return;
+          activeRunRef.current = null;
+          clearInterval(ticker);
+          if (tickerRef.current === ticker) tickerRef.current = null;
+          if (watchdogRef.current === watchdog) watchdogRef.current = null;
+          if (!mountedRef.current) return;
           setBusy(false);
           setNote(t('reminderCheckTimeout'));
         }, 90_000);
+        watchdogRef.current = watchdog;
         let failure = '';
         try {
           await rpcCall('check.run', { force: true });
         } catch {
           failure = t('reminderCheckFailed');
         }
+        // Superseded (timed out and replaced): leave the live run's state alone.
+        if (activeRunRef.current !== runToken) return;
+        activeRunRef.current = null;
         clearInterval(ticker);
+        if (tickerRef.current === ticker) tickerRef.current = null;
         clearTimeout(watchdog);
+        if (watchdogRef.current === watchdog) watchdogRef.current = null;
         await reload();
+        if (!mountedRef.current || activeRunRef.current !== null) return;
         setBusy(false);
         setNote(failure || t('reminderCheckedNow'));
       };
@@ -1114,12 +1194,20 @@ window.__ModuleLoader__.load({
       // One request for the whole pending set, into a fresh conversation: the
       // user asked for a draft they send themselves, so nothing is submitted.
       const updateAll = () => {
-        const outcome = sendAi(buildBatchPrompt(pending, t, state?.profileDir));
-        if (outcome === 'session' || outcome === 'draft') {
-          setOpen(false);
-          return;
+        // Same click twice (or a double-tap) must not start two sessions and
+        // draft the batch prompt into both.
+        if (sendingRef.current) return;
+        sendingRef.current = true;
+        try {
+          const outcome = sendAi(buildBatchPrompt(pending, t, state?.profileDir));
+          if (outcome === 'session' || outcome === 'draft') {
+            setOpen(false);
+            return;
+          }
+          setNote(outcome === 'clipboard' ? t('askAiCopied') : t('askAiNoSession'));
+        } finally {
+          sendingRef.current = false;
         }
-        setNote(outcome === 'clipboard' ? t('askAiCopied') : t('askAiNoSession'));
       };
 
       return h('div', {
@@ -1220,6 +1308,11 @@ window.__ModuleLoader__.load({
       // can also be behind upstream, so mixing both into one chip row made the
       // counts read as if they excluded each other.
       const [sourceFilter, setSourceFilter] = useState('all');
+      // Refs, not state: two clicks in one tick both see the same `running`
+      // snapshot and would start two scans (the host dedups, but the page then
+      // renders whichever response lands last).
+      const runningRef = useRef(false);
+      const batchRef = useRef(false);
 
       useEffect(() => {
         let alive = true;
@@ -1236,7 +1329,8 @@ window.__ModuleLoader__.load({
       }, []);
 
       const run = async () => {
-        if (running) return;
+        if (runningRef.current) return;
+        runningRef.current = true;
         setRunning(true);
         setError('');
         try {
@@ -1244,6 +1338,7 @@ window.__ModuleLoader__.load({
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err));
         } finally {
+          runningRef.current = false;
           setRunning(false);
         }
       };
@@ -1277,12 +1372,18 @@ window.__ModuleLoader__.load({
           setNotice(t('batchUpdateEmpty'));
           return;
         }
-        const outcome = sendAi(buildBatchPrompt(actionable, t, data?.profileDir));
-        setNotice(outcome === 'session' ? t('batchUpdateSent')
-          : outcome === 'draft' ? t('batchUpdateDraft')
-            : outcome === 'clipboard' ? t('askAiCopied') : t('askAiNoSession'));
-        if (outcome === 'session' || outcome === 'draft') {
-          try { close?.(); } catch { /* panel already gone */ }
+        if (batchRef.current) return;
+        batchRef.current = true;
+        try {
+          const outcome = sendAi(buildBatchPrompt(actionable, t, data?.profileDir));
+          setNotice(outcome === 'session' ? t('batchUpdateSent')
+            : outcome === 'draft' ? t('batchUpdateDraft')
+              : outcome === 'clipboard' ? t('askAiCopied') : t('askAiNoSession'));
+          if (outcome === 'session' || outcome === 'draft') {
+            try { close?.(); } catch { /* panel already gone */ }
+          }
+        } finally {
+          batchRef.current = false;
         }
       };
 
@@ -1479,7 +1580,13 @@ window.__ModuleLoader__.load({
           return fallbackDict[key] ?? key;
         };
         if (ctx.locale && typeof ctx.locale.register === 'function') {
-          ctx.effect(() => ctx.locale.register(NS, dict));
+          try {
+            ctx.effect(() => ctx.locale.register(NS, dict));
+          } catch (error) {
+            // Re-registering the namespace during a hot reload throws; the
+            // inline dict below is complete, so keep the panel usable.
+            ctx.logger?.warn?.('dsh-update-checker: locale registration skipped', error);
+          }
         }
 
         // Keyframes, interaction states, and accessibility adaptations

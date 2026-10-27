@@ -22,16 +22,19 @@ check('settings page sends force:true',
   (client.match(/rpcCall\('check\.run', \{ force: true \}\)/g) ?? []).length === 2,
   `count=${(client.match(/rpcCall\('check\.run', \{ force: true \}\)/g) ?? []).length}`);
 check('server honours the force flag', /const force = payload\?\.force === true;/.test(index));
-check('server freshness window is skipped when forced',
-  /&& !force\s*\n\s*&& Date\.now\(\) - new Date\(lastResult\.at\)/.test(index));
+check('server applies a burst floor to forced re-checks',
+  /const freshMs = force \? FORCE_FLOOR_MS : FRESH_WINDOW_MS;/.test(index));
 
 // 2. the button cannot stay disabled: elapsed ticker + watchdog + reset
 const checkNow = client.slice(client.indexOf('const checkNow = async () => {'));
 const body = checkNow.slice(0, checkNow.indexOf('\n      };'));
 check('elapsed seconds are rendered while busy', /setElapsed\(Math\.round\(/.test(body));
-check('watchdog clears busy', /const watchdog = setTimeout\(\(\) => \{\s*\n\s*setBusy\(false\);/.test(body));
+check('watchdog clears busy', /const watchdog = setTimeout\(\(\) => \{[\s\S]*?setBusy\(false\);/.test(body));
 check('watchdog is cancelled on the normal path', /clearTimeout\(watchdog\);/.test(body));
 check('ticker is cancelled on the normal path', /clearInterval\(ticker\);/.test(body));
+check('late run cannot clobber a newer one', /activeRunRef\.current !== runToken\) return;/.test(body));
+check('unmount clears both timers', /return \(\) => \{\s*\n\s*mountedRef\.current = false;[\s\S]*?clearInterval\(tickerRef\.current\)[\s\S]*?clearTimeout\(watchdogRef\.current\)/.test(client));
+check('late responses cannot set state after unmount', /if \(!mountedRef\.current\) return;/.test(body));
 check('busy is reset after the call', /setNote\(failure \|\| t\('reminderCheckedNow'\)\);/.test(body));
 check('button label shows elapsed time',
   /t\('reminderCheckingElapsed'\)\.replace\('%ds', String\(elapsed\)\)/.test(client));

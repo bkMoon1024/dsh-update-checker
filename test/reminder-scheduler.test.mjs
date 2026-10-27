@@ -171,6 +171,13 @@ try {
   check('reminder.state carries lastCheckAt', typeof stateValue?.lastCheckAt === 'string', String(stateValue?.lastCheckAt));
   eq(stateValue?.visible, false, 'empty pending is not visible');
 
+  // A burst of forced clicks must reuse a just-finished scan instead of firing
+  // another batch of upstream requests (GitHub's anonymous quota is 60/h).
+  const forcedA = valueOf(await callRpc(route, 'check.run', { force: true }));
+  const forcedB = valueOf(await callRpc(route, 'check.run', { force: true }));
+  check('check.run answers through the web channel', !!forcedA?.at, JSON.stringify(forcedA)?.slice(0, 160));
+  eq(forcedA?.at, forcedB?.at, 'forced re-check reuses a just-finished scan');
+
   // --- Scenario B: seeded pending set, scans disabled ----------------------
   await fiber.dispose();
   fiber = null;
@@ -200,12 +207,12 @@ try {
   eq(seededValue?.config, { enabled: false, intervalMinutes: 1440 }, 'disabled config round trips through RPC');
   eq(seededValue?.pending, seededPending, 'persisted pending rows survive the RPC read (0.3.2 bug)');
   eq(seededValue?.visible, true, 'pending updates make the reminder visible');
-  eq(seededValue?.fingerprint, 'alpha@1.1.0|beta@2.1.0', 'fingerprint covers name@latest');
+  eq(seededValue?.fingerprint, '[["alpha","1.1.0"],["beta","2.1.0"]]', 'fingerprint covers name@latest');
 
   const ignored = valueOf(await callRpc(seededRoute, 'reminder.ignore', { mode: 'once' }));
   eq(ignored?.visible, false, 'ignore once hides the reminder');
-  eq(ignored?.fingerprint, 'alpha@1.1.0|beta@2.1.0', 'ignore once keeps the fingerprint');
-  eq((await readReminderState(profileContext)).ignoredFingerprint, 'alpha@1.1.0|beta@2.1.0', 'ignore once persists');
+  eq(ignored?.fingerprint, '[["alpha","1.1.0"],["beta","2.1.0"]]', 'ignore once keeps the fingerprint');
+  eq((await readReminderState(profileContext)).ignoredFingerprint, '[["alpha","1.1.0"],["beta","2.1.0"]]', 'ignore once persists');
 
   const ignoredAll = valueOf(await callRpc(seededRoute, 'reminder.ignore', { mode: 'all' }));
   eq(ignoredAll?.pending, [], 'ignore all clears pending');

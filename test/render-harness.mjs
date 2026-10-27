@@ -29,6 +29,7 @@ const React = {
   },
   useEffect: () => {},
   useMemo: (fn) => fn(),
+  useRef: (initial) => ({ current: initial }),
 };
 
 // DOM stubs for apply()
@@ -145,7 +146,7 @@ const Reminder = footer.comp;
 const pendingPayload = {
   config: { enabled: true, intervalMinutes: 60 },
   visible: true,
-  fingerprint: 'dsh-pocket@2.10.8',
+  fingerprint: '[["dsh-pocket","2.10.8"]]',
   pending: [{ name: 'dsh-pocket', installed: '2.10.7', latest: '2.10.8', kind: 'npm', spec: '^2', repoUrl: '', pageUrl: '' }],
   lastCheckAt: new Date().toISOString(),
   lastError: null,

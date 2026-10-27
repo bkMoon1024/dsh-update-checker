@@ -48,7 +48,7 @@
     }
   },
   "scripts": {
-    "test": "node test/checker.test.mjs && node test/http.test.mjs && node test/integration.test.mjs && node test/md.test.mjs && node test/render-harness.mjs && node test/lifecycle.test.mjs && node test/reminder.test.mjs && node test/reminder-panel.test.mjs && node test/batch-update.test.mjs && node test/reminder-scheduler.test.mjs",
+    "test": "node test/checker.test.mjs && node test/http.test.mjs && node test/host.test.mjs && node test/integration.test.mjs && node test/md.test.mjs && node test/render-harness.mjs && node test/lifecycle.test.mjs && node test/reminder.test.mjs && node test/reminder-panel.test.mjs && node test/batch-update.test.mjs && node test/reminder-scheduler.test.mjs",
     "test:e2e": "node test/harness.mjs"
   }
 }

@@ -2,7 +2,7 @@
 // the on-disk round trip (no host, no network).
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile, mkdir } from 'node:fs/promises';
 import {
   DEFAULT_CONFIG,
   INTERVAL_CHOICES,
@@ -22,10 +22,12 @@ import {
   reminderPayload,
   ignoreFingerprint,
   ignoreAllPending,
+  pruneIgnored,
   readConfig,
   writeConfig,
   readReminderState,
   writeReminderState,
+  writeJsonAtomic,
 } from '../lib/reminder.js';
 
 let passed = 0;
@@ -55,6 +57,15 @@ eq(normalizeInterval(0), 5, 'interval clamps low');
 eq(normalizeInterval(99_999), 1440, 'interval clamps high');
 eq(normalizeInterval('120'), 120, 'numeric string accepted');
 eq(normalizeInterval('soon'), DEFAULT_CONFIG.intervalMinutes, 'garbage falls back');
+// Missing/null settings must not become the most aggressive schedule: the old
+// Number(null) coercion clamped to 5 minutes and burned the GitHub quota.
+eq(normalizeInterval(null), DEFAULT_CONFIG.intervalMinutes, 'null falls back to default');
+eq(normalizeInterval(''), DEFAULT_CONFIG.intervalMinutes, 'empty string falls back');
+eq(normalizeInterval(undefined), DEFAULT_CONFIG.intervalMinutes, 'undefined falls back');
+eq(normalizeInterval(false), DEFAULT_CONFIG.intervalMinutes, 'false falls back');
+eq(normalizeInterval(true), DEFAULT_CONFIG.intervalMinutes, 'true falls back');
+eq(normalizeInterval([]), DEFAULT_CONFIG.intervalMinutes, 'array falls back');
+eq(normalizeInterval(Number.NaN), DEFAULT_CONFIG.intervalMinutes, 'NaN falls back');
 eq(normalizeConfig(undefined), { enabled: true, intervalMinutes: 60 }, 'config defaults');
 eq(normalizeConfig({ enabled: false }), { enabled: false, intervalMinutes: 60 }, 'config keeps disabled');
 eq(normalizeConfig({ intervalMinutes: 1 }), { enabled: true, intervalMinutes: 5 }, 'config clamps interval');
@@ -63,11 +74,16 @@ eq(INTERVAL_CHOICES, [30, 60, 120, 360], 'interval presets');
 eq(START_DELAY_MS, 30_000, 'start delay');
 
 // --- fingerprintOf / pendingFromResult ------------------------------------
-eq(fingerprintOf([]), '', 'empty fingerprint');
+eq(fingerprintOf([]), '[]', 'empty fingerprint');
 eq(
   fingerprintOf([{ name: 'b', latest: '2' }, { name: 'a', latest: '1' }]),
-  'a@1|b@2',
+  JSON.stringify([['a', '1'], ['b', '2']]),
   'fingerprint is sorted',
+);
+eq(
+  fingerprintOf([{ name: 'a@1|b', latest: '2' }]) !== fingerprintOf([{ name: 'a', latest: '1|b@2' }]),
+  true,
+  'fingerprint cannot collide through the separator',
 );
 eq(
   pendingFromResult({
@@ -151,10 +167,18 @@ eq(
 eq(
   reminderPayload({
     config: {},
-    state: stateWith({ pending: pendingTwo, ignoredFingerprint: 'a@1|b@2' }),
+    state: stateWith({ pending: pendingTwo, ignoredFingerprint: JSON.stringify([['a', '1'], ['b', '2']]) }),
   }).visible,
   false,
   'dismissed fingerprint hides the reminder',
+);
+eq(
+  reminderPayload({
+    config: {},
+    state: stateWith({ pending: pendingTwo, ignoredFingerprint: 'a@1|b@2' }),
+  }).visible,
+  false,
+  'pre-upgrade fingerprint (sorted name@latest) still dismisses',
 );
 eq(
   reminderPayload({
@@ -175,12 +199,26 @@ eq(
 
 // --- ignore helpers --------------------------------------------------------
 const fingerprintState = ignoreFingerprint(stateWith({ pending: pendingTwo }));
-eq(fingerprintState.ignoredFingerprint, 'a@1|b@2', 'ignore once records fingerprint');
+eq(fingerprintState.ignoredFingerprint, JSON.stringify([['a', '1'], ['b', '2']]), 'ignore once records fingerprint');
 eq(fingerprintState.pending, pendingTwo, 'ignore once keeps pending rows');
 const allState = ignoreAllPending(stateWith({ pending: pendingTwo, ignored: { z: '9' } }));
 eq(allState.pending, [], 'ignore all clears pending');
 eq(allState.ignored, { z: '9', a: '1', b: '2' }, 'ignore all records every version');
 eq(allState.ignoredFingerprint, null, 'ignore all clears dismissal fingerprint');
+
+// Dependency names are not identifiers: a plugin literally called __proto__
+// must still be dismissible, and bookkeeping must never touch the prototype.
+const protoState = ignoreAllPending(stateWith({ pending: [compact('__proto__', '1'), compact('constructor', '2')] }));
+eq(protoState.pending, [], 'ignore all clears pending for hostile names');
+eq(Object.keys(protoState.ignored).includes('__proto__'), true, 'ignore all stores __proto__ as own data');
+eq(protoState.ignored.__proto__, '1', 'ignore all keeps the hostile version');
+eq(Object.getPrototypeOf(protoState.ignored) === Object.prototype, true, 'ignore map keeps a normal prototype');
+eq(Object.prototype.polluted, undefined, 'ignore bookkeeping does not pollute Object.prototype');
+
+// pruneIgnored: entries for plugins no longer installed must not grow forever.
+eq(pruneIgnored({ a: '1', b: '2' }, [{ name: 'a' }]), { a: '1' }, 'prune drops uninstalled names');
+eq(pruneIgnored({ a: '1' }, []), {}, 'prune clears when nothing is installed anymore');
+eq(pruneIgnored({ a: '1' }, undefined), {}, 'prune treats missing rows as nothing installed');
 
 // --- nextDelayMs: interval and failure backoff ----------------------------
 eq(nextDelayMs({}), 60 * 60_000, 'delay defaults to one hour');
@@ -232,6 +270,25 @@ try {
 
   const leftover = (await readdir(path.join(tmpHome, 'dsh-update-checker'))).filter((name) => name.endsWith('.tmp'));
   eq(leftover, [], 'atomic writes leave no temp files');
+
+  // Write failures must surface instead of reporting success with an
+  // unchanged file; the old code returned the new config from memory.
+  const blocker = path.join(tmpHome, 'blocker');
+  await writeFile(blocker, 'x', 'utf8');
+  let configFailure = null;
+  try {
+    await writeConfig({ name: 'desktop', dir: profileDir, home: blocker }, { intervalMinutes: 30 });
+  } catch (error) {
+    configFailure = error;
+  }
+  eq(configFailure instanceof Error, true, 'config write failure is surfaced');
+
+  // A failed atomic write must not leave its temp file behind either.
+  const dirTarget = path.join(tmpHome, 'dsh-update-checker', 'as-directory.json');
+  await mkdir(dirTarget, { recursive: true });
+  eq(await writeJsonAtomic(dirTarget, { a: 1 }), false, 'atomic write reports rename failure');
+  const failedLeftovers = (await readdir(path.join(tmpHome, 'dsh-update-checker'))).filter((name) => name.endsWith('.tmp'));
+  eq(failedLeftovers, [], 'failed atomic write removes its temp file');
 } finally {
   await rm(tmpHome, { recursive: true, force: true });
 }

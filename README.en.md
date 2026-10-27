@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/daha1216/dsh-update-checker?color=4d6bfe.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](./LICENSE)
 [![DSH plugin](https://img.shields.io/badge/DSH-plugin-4A90D9.svg?style=flat-square)](https://github.com/topics/dsh-plugin)
-[![Tests Passing](https://img.shields.io/badge/tests-250%2B%20passed-brightgreen.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker)
+[![Tests Passing](https://img.shields.io/badge/tests-350%2B%20passed-brightgreen.svg?style=flat-square)](https://github.com/daha1216/dsh-update-checker)
 [![Node >=22](https://img.shields.io/badge/node-%E2%89%A522-339933.svg?style=flat-square)](https://nodejs.org)
 
 [中文](./README.md) · **English**
@@ -173,7 +173,7 @@ dsh-update-checker/
 
 ## 🧪 Automated Testing
 
-The codebase includes 8 test suites with over **190 passed assertions**:
+The codebase includes 11 test suites with over **350 passed assertions**:
 
 ```bash
 # Run the complete offline test suite
@@ -183,20 +183,29 @@ npm test
 npm run test:e2e
 ```
 
-- `test/checker.test.mjs`: 38 assertions for version resolution, spec mapping, and status transitions.
-- `test/http.test.mjs`: 19 tests verifying TTL caching, single-flight coalescing, ETag revalidation, and circuit breaking.
-- `test/integration.test.mjs`: 24 tests simulating complete check pipelines under scripted network conditions.
+- `test/checker.test.mjs`: 69 assertions for exact version comparison, spec/range mapping, and status transitions.
+- `test/http.test.mjs`: 28 tests verifying TTL caching, single-flight coalescing, ETag revalidation, cache bounds, error-body release, and circuit breaking.
+- `test/host.test.mjs`: 30 tests over real sockets for the loopback fence and the `node:http` → fetch bridge (oversized bodies, disconnects, error containment).
+- `test/integration.test.mjs`: 30 tests simulating complete check pipelines under scripted network conditions (`#semver:` ranges, no mirror fallback on 404).
 - `test/md.test.mjs`: 23 tests validating Markdown parser accuracy and sanitization.
 - `test/render-harness.mjs`: Headless React rendering smoke tests for settings and popup views.
 - `test/lifecycle.test.mjs`: Real Cordis 4 lifecycle tests validating clean disposal and route teardown.
-- `test/reminder.test.mjs`: 57 assertions covering reminder state logic, ignore semantics, and atomic persistence.
-- `test/reminder-panel.test.mjs`: 16 source guards locking the force-refresh path, timers/watchdog and status-line copy.
+- `test/reminder.test.mjs`: 77 assertions covering reminder state logic, ignore semantics, fingerprint collisions, and atomic persistence.
+- `test/reminder-panel.test.mjs`: 19 source guards locking the force-refresh path, timers/watchdog and status-line copy.
 - `test/batch-update.test.mjs`: 43 assertions covering the batch list, updatable predicate and the "new conversation, fill but do not send" handoff.
-- `test/reminder-scheduler.test.mjs`: 33 assertions testing scheduler interval rescheduling and RPC fallbacks.
+- `test/reminder-scheduler.test.mjs`: 35 assertions testing scheduler interval rescheduling, the forced-refresh floor, and RPC fallbacks.
 
 ---
 
 ## 📝 Changelog
+
+### Unreleased (security & robustness audit, 2026-10-27)
+- **Host crash containment**: every async path of the `node:http` → fetch bridge (reading the request body, fetching, writing the response, `waitForDrain`) now runs inside try/catch/finally; a client disconnect cancels the response body and stops writing, and 500s only say `update check failed` — no internal messages or absolute paths reach the renderer. New `test/host.test.mjs` covers this with real sockets.
+- **Loopback fence parses the Host header** instead of `split(':')`: `127.0.0.1:56185@evil.example` is no longer trusted, IPv6 `[::1]:56185` works again, and 127/8 aliases are accepted. The bridge builds its `Request` from a fixed internal origin plus the request path, so a malformed Host or an absolute-form request line can no longer throw.
+- **Bounded inputs and honest errors**: an unreadable/malformed profile `package.json` fails the scan instead of pretending "no plugins"; dependency keys are validated against the npm shape before being joined into `node_modules`; packument names are encoded; a 404 from the primary registry no longer discloses the package name to the npmmirror fallback.
+- **Version decisions fixed**: digit segments above 2^53 compare exactly; `1`/`1.2` are ranges rather than exact pins; `#semver:` refs pick the highest satisfying tag (or report `unknown` when none matches) instead of recommending a breaking major; canonical `git+ssh`/`ssh://`/`git://`/`scp` GitHub URLs are recognized.
+- **Process hygiene**: the HTTP response cache is capped at 400 entries and released on fiber teardown; per-scan caches are dropped per profile; stale ignore entries are pruned; config/state/snapshot files are written 0700/0600 with temp-file cleanup; failed config writes no longer report success.
+- **Client timers and fingerprints**: `checkNow`'s 500 ms ticker and 90 s watchdog are cleared on success, timeout, and unmount; `draftInNewSession` subscribes before the first fill and cannot leak a listener when the new session mounts synchronously; reminder fingerprints are JSON-encoded pairs so `@`/`|` in plugin names cannot collide. Test matrix grows to 11 suites / 350+ assertions.
 
 ### v0.7.1 (2026-10-27)
 - **Fixed: the sidebar entry no longer squeezes other plugins out of its row.** The sidebar footer is a flex row shared by several plugins, and this one hard-coded `width: 100%` with `flex: none` — whenever another entry shared the row (for example the dsh-purge status dot), it took the entire width and left that entry a few pixels wide. It now uses `flex: 1 1 0%; min-width: 0`, spreading when there is room and shrinking when there isn't, with overlong titles handled by the existing ellipsis; the collapsed rail keeps an explicit `flex: 0 0 36px`, matching its previous width.

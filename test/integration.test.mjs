@@ -82,7 +82,20 @@ const routes = new Map([
   ['https://api.github.com/repos/me/ghdev/releases?per_page=100', () => jsonResponse([
     { tag_name: 'v1.0.0', name: 'v1.0.0', published_at: '2026-09-20T00:00:00Z', body: '', html_url: '', prerelease: false },
   ])],
-  // fallback-pkg: dist-tags 404 on both registries → packument still works
+  // gh-semver: github spec pinned to a semver range (#semver:^1.0.0) — the
+  // range must cap the recommendation at v1.4.0, not the v2.0.0 major.
+  ['https://api.github.com/repos/me/ghsemver/releases?per_page=100', () => jsonResponse([
+    { tag_name: 'v2.0.0', name: 'v2.0.0', published_at: '2026-10-10T00:00:00Z', body: 'major', html_url: '', prerelease: false },
+    { tag_name: 'v1.4.0', name: 'v1.4.0', published_at: '2026-09-10T00:00:00Z', body: 'minor', html_url: '', prerelease: false },
+    { tag_name: 'v1.0.0', name: 'v1.0.0', published_at: '2026-01-10T00:00:00Z', body: 'base', html_url: '', prerelease: false },
+  ])],
+  // gh-nomatch: #semver:^9.0.0 matches no published tag — the row stays
+  // "unknown" instead of recommending the newest (breaking) major.
+  ['https://api.github.com/repos/me/ghnomatch/releases?per_page=100', () => jsonResponse([
+    { tag_name: 'v2.0.0', name: 'v2.0.0', published_at: '2026-10-10T00:00:00Z', body: 'major', html_url: '', prerelease: false },
+    { tag_name: 'v1.4.0', name: 'v1.4.0', published_at: '2026-09-10T00:00:00Z', body: 'minor', html_url: '', prerelease: false },
+  ])],
+  // fallback-pkg: dist-tags 404 on the primary registry → packument still works
   ['https://registry.npmjs.org/-/package/fallback-pkg/dist-tags', () => jsonResponse({ error: 'not found' }, { status: 404 })],
   ['https://registry.npmmirror.com/-/package/fallback-pkg/dist-tags', () => jsonResponse({ error: 'not found' }, { status: 404 })],
   ['https://registry.npmjs.org/fallback-pkg', () => jsonResponse({
@@ -122,6 +135,8 @@ await stub('gh-branch', { name: 'gh-branch', version: '0.0.0', description: 'bra
 await stub('gh-noref', { name: 'gh-noref', version: '1.0.0', description: 'github no ref' });
 await stub('gh-noref-current', { name: 'gh-noref-current', version: '2.0.0', description: 'github no ref current' });
 await stub('gh-unordered', { name: 'gh-unordered', version: 'dev', description: 'github no ref unorderable' });
+await stub('gh-semver', { name: 'gh-semver', version: '1.2.0', description: 'semver range install' });
+await stub('gh-nomatch', { name: 'gh-nomatch', version: '1.2.0', description: 'semver range install with no matching tag' });
 await stub('fallback-pkg', { name: 'fallback-pkg', version: '0.1.0', description: 'dist-tags dead' });
 await stub('dead-pkg', { name: 'dead-pkg', version: '0.0.1', description: 'all 500' });
 await writeFile(path.join(profileDir, 'package.json'), JSON.stringify({
@@ -140,6 +155,8 @@ await writeFile(path.join(profileDir, 'package.json'), JSON.stringify({
     'gh-noref': 'github:me/ghnoref',
     'gh-noref-current': 'github:me/ghcurrent',
     'gh-unordered': 'github:me/ghdev',
+    'gh-semver': 'github:me/ghsemver#semver:^1.0.0',
+    'gh-nomatch': 'github:me/ghnomatch#semver:^9.0.0',
     'fallback-pkg': '0.1.0',
     'dead-pkg': '0.0.1',
   },
@@ -158,7 +175,7 @@ else process.env.GITHUB_TOKEN = savedToken;
 
 const byName = Object.fromEntries(result.rows.map((row) => [row.name, row]));
 
-check('skip @deepseek-ai/* deps', result.rows.length === 13, `rows=${result.rows.map((r) => r.name).join(',')}`);
+check('skip @deepseek-ai/* deps', result.rows.length === 15, `rows=${result.rows.map((r) => r.name).join(',')}`);
 check('current-pkg → latest via dist-tags fast path', byName['current-pkg']?.status === 'latest' && byName['current-pkg'].latest === '1.0.0');
 check('fast path fetched no packument for current-pkg', !hits.has('https://registry.npmjs.org/current-pkg'), [...hits.keys()].join(' '));
 check('outdated-pkg → update', byName['outdated-pkg']?.status === 'update' && byName['outdated-pkg'].latest === '1.1.0');
@@ -173,13 +190,15 @@ check('gh-branch (branch ref, installed version orderable) → update', byName['
 check('gh-noref (no ref) → update past installed 1.0.0', byName['gh-noref']?.status === 'update' && byName['gh-noref'].latest === 'v1.2.0' && byName['gh-noref'].releases?.map((r) => r.tag).join(',') === 'v1.2.0,v1.1.0', JSON.stringify(byName['gh-noref']?.releases?.map((r) => r.tag)));
 check('gh-noref-current (no ref, installed == newest tag) → latest', byName['gh-noref-current']?.status === 'latest' && byName['gh-noref-current'].latest === 'v2.0.0');
 check('gh-unordered (non-semver installed) → branch, not update', byName['gh-unordered']?.status === 'branch' && byName['gh-unordered'].releases?.length === 1);
+check('gh-semver (#semver:^1.0.0) caps the target below the 2.0.0 major', byName['gh-semver']?.status === 'update' && byName['gh-semver'].latest === 'v1.4.0' && byName['gh-semver'].releases?.map((r) => r.tag).join(',') === 'v1.4.0', JSON.stringify({ status: byName['gh-semver']?.status, latest: byName['gh-semver']?.latest, releases: byName['gh-semver']?.releases?.map((r) => r.tag) }));
+check('gh-nomatch (range with no matching tag) → unknown, not newest major', byName['gh-nomatch']?.status === 'unknown', JSON.stringify({ status: byName['gh-nomatch']?.status, latest: byName['gh-nomatch']?.latest }));
 check('GITHUB_TOKEN forwarded as bearer header', seenAuth.length > 0 && seenAuth.every((value) => value === 'Bearer test-token-123'), seenAuth.join('|'));
 check('fallback-pkg survives dist-tags 404 via packument', byName['fallback-pkg']?.status === 'update' && byName['fallback-pkg'].latest === '0.2.0');
 check('dead-pkg → error row, scan survives', byName['dead-pkg']?.status === 'error' && typeof byName['dead-pkg'].error === 'string');
 
 const statuses = result.rows.map((row) => row.status);
 check('sort: update rows before local-behind before error', statuses.indexOf('update') === 0 && statuses.lastIndexOf('update') < statuses.indexOf('local-behind') && statuses.indexOf('local-behind') < statuses.indexOf('error'), statuses.join(','));
-check('counts summarize statuses', result.counts.update === 5 && result.counts['local-behind'] === 2 && result.counts.error === 1 && result.counts.latest === 2 && result.counts['local-ahead'] === 1 && result.counts['local-latest'] === 1 && result.counts.branch === 1, JSON.stringify(result.counts));
+check('counts summarize statuses', result.counts.update === 6 && result.counts['local-behind'] === 2 && result.counts.error === 1 && result.counts.latest === 2 && result.counts['local-ahead'] === 1 && result.counts['local-latest'] === 1 && result.counts.branch === 1 && result.counts.unknown === 1, JSON.stringify(result.counts));
 check('stats attached with request counts', typeof result.stats.requests === 'number' && result.stats.requests > 0, JSON.stringify(result.stats));
 
 const firstRunRequests = result.stats.requests;
@@ -196,13 +215,57 @@ const successUrls = [
   'https://api.github.com/repos/me/equalrepo/releases?per_page=100',
   'https://api.github.com/repos/me/novrepo/releases?per_page=100',
   'https://api.github.com/repos/me/ghbranch/releases?per_page=100',
+  'https://api.github.com/repos/me/ghsemver/releases?per_page=100',
+  'https://api.github.com/repos/me/ghnomatch/releases?per_page=100',
   'https://registry.npmjs.org/fallback-pkg',
 ];
 const result2 = await runCheck(profileDir, null, http);
 const retried = [...hits.entries()].filter(([url, count]) => count > 1).map(([url]) => url);
 check('second scan: successful URLs served from TTL cache (1 hit each)', successUrls.every((url) => hits.get(url) === 1), JSON.stringify(successUrls.filter((url) => hits.get(url) !== 1)));
-check('second scan: only failed URLs retried', retried.length === 6 && retried.every((url) => url.includes('dead-pkg') || url.includes('fallback-pkg/dist-tags')), retried.join(' '));
+check('second scan: only failed URLs retried', retried.length === 5 && retried.every((url) => url.includes('dead-pkg') || url.includes('fallback-pkg/dist-tags')), retried.join(' '));
+// A 404 on the primary registry must not be forwarded to the npmmirror mirror.
+check('dist-tags 404 is not mirrored', !hits.has('https://registry.npmmirror.com/-/package/fallback-pkg/dist-tags'), [...hits.keys()].filter((url) => url.includes('fallback-pkg')).join(' '));
 check('second scan: identical statuses', JSON.stringify(result2.rows.map((r) => r.status)) === JSON.stringify(result.rows.map((r) => r.status)));
+
+// --- manifest errors are not "a profile with no plugins" -------------------
+{
+  const badDir = await mkdtemp(path.join(tmpdir(), 'dsh-uc-bad-'));
+  await writeFile(path.join(badDir, 'package.json'), '{ this is not json');
+  let malformed = null;
+  try {
+    await runCheck(badDir, null, createHttpLayer({ fetch: fakeFetch }));
+  } catch (error) {
+    malformed = error;
+  }
+  check('malformed profile manifest fails the scan', malformed instanceof Error && /not valid JSON/.test(malformed.message), String(malformed));
+  await rm(badDir, { recursive: true, force: true });
+
+  const freshDir = await mkdtemp(path.join(tmpdir(), 'dsh-uc-fresh-'));
+  const fresh = await runCheck(freshDir, null, createHttpLayer({ fetch: fakeFetch }));
+  check('missing manifest still means no plugins', fresh.rows.length === 0, JSON.stringify(fresh.rows));
+  await rm(freshDir, { recursive: true, force: true });
+}
+
+// --- dependency keys are not filesystem paths -------------------------------
+{
+  const hostileDir = await mkdtemp(path.join(tmpdir(), 'dsh-uc-hostile-'));
+  await mkdir(path.join(hostileDir, 'node_modules', 'current-pkg'), { recursive: true });
+  await writeFile(
+    path.join(hostileDir, 'node_modules', 'current-pkg', 'package.json'),
+    JSON.stringify({ name: 'current-pkg', version: '1.0.0' }),
+  );
+  await writeFile(path.join(hostileDir, 'package.json'), JSON.stringify({
+    name: 'hostile',
+    dependencies: {
+      '../../../../home/me/.ssh/id_rsa': '1.0.0',
+      '..\\\\..\\\\secrets': '1.0.0',
+      'current-pkg': '1.0.0',
+    },
+  }));
+  const hostile = await runCheck(hostileDir, null, http);
+  check('hostile dependency names are never scanned', hostile.rows.map((row) => row.name).join(',') === 'current-pkg', hostile.rows.map((row) => row.name).join(','));
+  await rm(hostileDir, { recursive: true, force: true });
+}
 
 await rm(profileDir, { recursive: true, force: true });
 

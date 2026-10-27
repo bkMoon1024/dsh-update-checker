@@ -165,6 +165,79 @@ function jsonResponse(body, { etag, status = 200 } = {}) {
   check('failure not cached: retried and recovered', firstError instanceof HttpError && second.recovered === true, `calls=${calls}`);
 }
 
+// 10. cache is bounded: the oldest entry is evicted once the cap is reached
+{
+  let calls = 0;
+  const http = createHttpLayer({ fetch: async () => { calls += 1; return jsonResponse({ n: calls }); } });
+  for (let i = 0; i < 401; i += 1) await http.getJson(`https://x.test/cache-${i}`);
+  const before = calls;
+  await http.getJson('https://x.test/cache-0');
+  check('cache cap: oldest entry already evicted', calls === before + 1, `calls=${calls} before=${before}`);
+  await http.getJson('https://x.test/cache-400');
+  check('cache cap: newest entry still cached', calls === before + 1, `calls=${calls}`);
+}
+
+// 11. dispose(): the shared layer can release its bodies on fiber teardown
+{
+  let calls = 0;
+  const http = createHttpLayer({ fetch: async () => { calls += 1; return jsonResponse({ ok: true }); } });
+  await http.getJson('https://x.test/dispose');
+  http.dispose();
+  await http.getJson('https://x.test/dispose');
+  check('dispose: cached entry released', calls === 2, `calls=${calls}`);
+}
+
+// 12. a malformed caller signal must not leak a semaphore slot
+{
+  const http = createHttpLayer({ concurrency: 1, fetch: async () => jsonResponse({ ok: true }) });
+  let malformed = null;
+  try { await http.getJson('https://x.test/sig', { signal: { aborted: false } }); } catch (error) { malformed = error; }
+  check('malformed signal: request itself still works', malformed === null, String(malformed));
+  const result = await Promise.race([
+    http.getJson('https://x.test/sig-after'),
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), 1000)),
+  ]);
+  check('malformed signal: semaphore slot released', result !== 'timeout' && result.ok === true, String(result));
+}
+
+// 13. a non-2xx body is cancelled, not parked until GC
+{
+  let cancelled = false;
+  const http = createHttpLayer({
+    fetch: async () => {
+      const response = jsonResponse({}, { status: 500 });
+      response.body = { cancel: async () => { cancelled = true; } };
+      return response;
+    },
+  });
+  let caught = null;
+  try { await http.getJson('https://x.test/error-body'); } catch (error) { caught = error; }
+  check('http error: response body cancelled', cancelled === true, String(cancelled));
+  check('http error: still an HttpError', caught instanceof HttpError && caught.status === 500, String(caught));
+}
+
+// 14. dispose() during an in-flight request: it completes, but must not
+// repopulate the cache (a torn-down fiber's scan keeps running).
+{
+  let release = null;
+  let calls = 0;
+  const http = createHttpLayer({
+    fetch: async () => {
+      calls += 1;
+      if (calls === 1) await new Promise((resolve) => { release = resolve; });
+      return jsonResponse({ n: calls });
+    },
+  });
+  const pending = http.getJson('https://x.test/dispose-race');
+  while (!release) await new Promise((resolve) => setTimeout(resolve, 1));
+  http.dispose();
+  release();
+  const value = await pending;
+  check('dispose race: in-flight request still completes', value.n === 1, JSON.stringify(value));
+  const again = await http.getJson('https://x.test/dispose-race');
+  check('dispose race: cache not repopulated by the old generation', calls === 2 && again.n === 2, `calls=${calls}`);
+}
+
 const failed = results.filter((pass) => !pass).length;
 console.log(`\n${results.length - failed}/${results.length} passed`);
 process.exit(failed ? 1 : 0);
