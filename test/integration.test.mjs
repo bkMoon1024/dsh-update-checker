@@ -107,6 +107,19 @@ const routes = new Map([
   ['https://registry.npmmirror.com/-/package/dead-pkg/dist-tags', () => jsonResponse({}, { status: 500 })],
   ['https://registry.npmjs.org/dead-pkg', () => jsonResponse({}, { status: 500 })],
   ['https://registry.npmmirror.com/dead-pkg', () => jsonResponse({}, { status: 500 })],
+  // dead-pkg exhausts the CDN chain too, so it stays an error row
+  ['https://unpkg.com/dead-pkg/package.json', () => jsonResponse({}, { status: 500 })],
+  ['https://cdn.jsdelivr.net/npm/dead-pkg/package.json', () => jsonResponse({}, { status: 500 })],
+  // cdn-only-pkg: both registries fail at the transport layer — the corporate
+  // TLS-interception shape — while the CDN answers, so the row still resolves.
+  ['https://registry.npmjs.org/-/package/cdn-only-pkg/dist-tags', () => { throw new TypeError('fetch failed'); }],
+  ['https://registry.npmmirror.com/-/package/cdn-only-pkg/dist-tags', () => { throw new TypeError('fetch failed'); }],
+  ['https://unpkg.com/cdn-only-pkg/package.json', () => jsonResponse({ name: 'cdn-only-pkg', version: '3.0.0' })],
+  // @scope/cdn-pkg: same failure for a scoped name. The CDN path must keep the
+  // "@scope/name" slash: an encoded %40scope%2Fname 404s on unpkg/jsDelivr.
+  ['https://registry.npmjs.org/-/package/%40scope%2Fcdn-pkg/dist-tags', () => { throw new TypeError('fetch failed'); }],
+  ['https://registry.npmmirror.com/-/package/%40scope%2Fcdn-pkg/dist-tags', () => { throw new TypeError('fetch failed'); }],
+  ['https://unpkg.com/@scope/cdn-pkg/package.json', () => jsonResponse({ name: '@scope/cdn-pkg', version: '1.2.0' })],
 ]);
 
 const seenAuth = [];
@@ -139,6 +152,8 @@ await stub('gh-semver', { name: 'gh-semver', version: '1.2.0', description: 'sem
 await stub('gh-nomatch', { name: 'gh-nomatch', version: '1.2.0', description: 'semver range install with no matching tag' });
 await stub('fallback-pkg', { name: 'fallback-pkg', version: '0.1.0', description: 'dist-tags dead' });
 await stub('dead-pkg', { name: 'dead-pkg', version: '0.0.1', description: 'all 500' });
+await stub('cdn-only-pkg', { name: 'cdn-only-pkg', version: '2.0.0', description: 'registries unreachable' });
+await stub('@scope/cdn-pkg', { name: '@scope/cdn-pkg', version: '1.0.0', description: 'scoped, registries unreachable' });
 await writeFile(path.join(profileDir, 'package.json'), JSON.stringify({
   name: 'profile',
   private: true,
@@ -159,6 +174,8 @@ await writeFile(path.join(profileDir, 'package.json'), JSON.stringify({
     'gh-nomatch': 'github:me/ghnomatch#semver:^9.0.0',
     'fallback-pkg': '0.1.0',
     'dead-pkg': '0.0.1',
+    'cdn-only-pkg': '2.0.0',
+    '@scope/cdn-pkg': '1.0.0',
   },
 }, null, 2));
 
@@ -175,7 +192,7 @@ else process.env.GITHUB_TOKEN = savedToken;
 
 const byName = Object.fromEntries(result.rows.map((row) => [row.name, row]));
 
-check('skip @deepseek-ai/* deps', result.rows.length === 15, `rows=${result.rows.map((r) => r.name).join(',')}`);
+check('skip @deepseek-ai/* deps', result.rows.length === 17, `rows=${result.rows.map((r) => r.name).join(',')}`);
 check('current-pkg → latest via dist-tags fast path', byName['current-pkg']?.status === 'latest' && byName['current-pkg'].latest === '1.0.0');
 check('fast path fetched no packument for current-pkg', !hits.has('https://registry.npmjs.org/current-pkg'), [...hits.keys()].join(' '));
 check('outdated-pkg → update', byName['outdated-pkg']?.status === 'update' && byName['outdated-pkg'].latest === '1.1.0');
@@ -195,10 +212,13 @@ check('gh-nomatch (range with no matching tag) → unknown, not newest major', b
 check('GITHUB_TOKEN forwarded as bearer header', seenAuth.length > 0 && seenAuth.every((value) => value === 'Bearer test-token-123'), seenAuth.join('|'));
 check('fallback-pkg survives dist-tags 404 via packument', byName['fallback-pkg']?.status === 'update' && byName['fallback-pkg'].latest === '0.2.0');
 check('dead-pkg → error row, scan survives', byName['dead-pkg']?.status === 'error' && typeof byName['dead-pkg'].error === 'string');
+check('cdn-only-pkg → update via CDN when both registries fail', byName['cdn-only-pkg']?.status === 'update' && byName['cdn-only-pkg'].latest === '3.0.0', JSON.stringify({ status: byName['cdn-only-pkg']?.status, latest: byName['cdn-only-pkg']?.latest }));
+check('scoped name keeps its slash on the CDN path', byName['@scope/cdn-pkg']?.status === 'update' && byName['@scope/cdn-pkg'].latest === '1.2.0' && !hits.has('https://unpkg.com/%40scope%2Fcdn-pkg/package.json'), JSON.stringify({ status: byName['@scope/cdn-pkg']?.status, latest: byName['@scope/cdn-pkg']?.latest }));
+check('a registry 404 never reaches the CDN fallback', !hits.has('https://unpkg.com/fallback-pkg/package.json') && !hits.has('https://cdn.jsdelivr.net/npm/fallback-pkg/package.json'), [...hits.keys()].filter((url) => url.includes('fallback-pkg')).join(' '));
 
 const statuses = result.rows.map((row) => row.status);
 check('sort: update rows before local-behind before error', statuses.indexOf('update') === 0 && statuses.lastIndexOf('update') < statuses.indexOf('local-behind') && statuses.indexOf('local-behind') < statuses.indexOf('error'), statuses.join(','));
-check('counts summarize statuses', result.counts.update === 6 && result.counts['local-behind'] === 2 && result.counts.error === 1 && result.counts.latest === 2 && result.counts['local-ahead'] === 1 && result.counts['local-latest'] === 1 && result.counts.branch === 1 && result.counts.unknown === 1, JSON.stringify(result.counts));
+check('counts summarize statuses', result.counts.update === 8 && result.counts['local-behind'] === 2 && result.counts.error === 1 && result.counts.latest === 2 && result.counts['local-ahead'] === 1 && result.counts['local-latest'] === 1 && result.counts.branch === 1 && result.counts.unknown === 1, JSON.stringify(result.counts));
 check('stats attached with request counts', typeof result.stats.requests === 'number' && result.stats.requests > 0, JSON.stringify(result.stats));
 
 const firstRunRequests = result.stats.requests;
@@ -222,7 +242,7 @@ const successUrls = [
 const result2 = await runCheck(profileDir, null, http);
 const retried = [...hits.entries()].filter(([url, count]) => count > 1).map(([url]) => url);
 check('second scan: successful URLs served from TTL cache (1 hit each)', successUrls.every((url) => hits.get(url) === 1), JSON.stringify(successUrls.filter((url) => hits.get(url) !== 1)));
-check('second scan: only failed URLs retried', retried.length === 5 && retried.every((url) => url.includes('dead-pkg') || url.includes('fallback-pkg/dist-tags')), retried.join(' '));
+check('second scan: only failed URLs retried', retried.every((url) => !successUrls.includes(url)) && retried.some((url) => url.includes('dead-pkg')), retried.join(' '));
 // A 404 on the primary registry must not be forwarded to the npmmirror mirror.
 check('dist-tags 404 is not mirrored', !hits.has('https://registry.npmmirror.com/-/package/fallback-pkg/dist-tags'), [...hits.keys()].filter((url) => url.includes('fallback-pkg')).join(' '));
 check('second scan: identical statuses', JSON.stringify(result2.rows.map((r) => r.status)) === JSON.stringify(result.rows.map((r) => r.status)));

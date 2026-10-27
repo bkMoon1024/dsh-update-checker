@@ -173,7 +173,7 @@ dsh-update-checker/
 
 ## 🧪 Automated Testing
 
-The codebase includes 11 test suites with over **350 passed assertions**:
+The codebase includes 11 test suites with **362 passed assertions**:
 
 ```bash
 # Run the complete offline test suite
@@ -186,7 +186,7 @@ npm run test:e2e
 - `test/checker.test.mjs`: 69 assertions for exact version comparison, spec/range mapping, and status transitions.
 - `test/http.test.mjs`: 28 tests verifying TTL caching, single-flight coalescing, ETag revalidation, cache bounds, error-body release, and circuit breaking.
 - `test/host.test.mjs`: 30 tests over real sockets for the loopback fence and the `node:http` → fetch bridge (oversized bodies, disconnects, error containment).
-- `test/integration.test.mjs`: 30 tests simulating complete check pipelines under scripted network conditions (`#semver:` ranges, no mirror fallback on 404).
+- `test/integration.test.mjs`: 33 tests simulating complete check pipelines under scripted network conditions (`#semver:` ranges, no mirror fallback on 404, CDN fallback when both registries fail).
 - `test/md.test.mjs`: 23 tests validating Markdown parser accuracy and sanitization.
 - `test/render-harness.mjs`: Headless React rendering smoke tests for settings and popup views.
 - `test/lifecycle.test.mjs`: Real Cordis 4 lifecycle tests validating clean disposal and route teardown.
@@ -204,8 +204,9 @@ npm run test:e2e
 - **Loopback fence parses the Host header** instead of `split(':')`: `127.0.0.1:56185@evil.example` is no longer trusted, IPv6 `[::1]:56185` works again, and 127/8 aliases are accepted. The bridge builds its `Request` from a fixed internal origin plus the request path, so a malformed Host or an absolute-form request line can no longer throw.
 - **Bounded inputs and honest errors**: an unreadable/malformed profile `package.json` fails the scan instead of pretending "no plugins"; dependency keys are validated against the npm shape before being joined into `node_modules`; packument names are encoded; a 404 from the primary registry no longer discloses the package name to the npmmirror fallback.
 - **Version decisions fixed**: digit segments above 2^53 compare exactly; `1`/`1.2` are ranges rather than exact pins; `#semver:` refs pick the highest satisfying tag (or report `unknown` when none matches) instead of recommending a breaking major; canonical `git+ssh`/`ssh://`/`git://`/`scp` GitHub URLs are recognized.
+- **CDN fallback for npm metadata**: when both registries are unreachable (corporate TLS-inspection gateway, poisoned DNS, registry outage), the checker now asks unpkg/jsDelivr for the package's published `package.json` and reads its `version`, so npm rows stop going red wholesale; an explicit registry 404 (package does not exist) still never discloses the name to a third host, and a host that fails at the transport layer is cooled down for 60 s so every row does not pay its timeout. Integration tests cover plain names, scoped names, and "404 never reaches the CDN".
 - **Process hygiene**: the HTTP response cache is capped at 400 entries and released on fiber teardown; per-scan caches are dropped per profile; stale ignore entries are pruned; config/state/snapshot files are written 0700/0600 with temp-file cleanup; failed config writes no longer report success.
-- **Client timers and fingerprints**: `checkNow`'s 500 ms ticker and 90 s watchdog are cleared on success, timeout, and unmount; `draftInNewSession` subscribes before the first fill and cannot leak a listener when the new session mounts synchronously; reminder fingerprints are JSON-encoded pairs so `@`/`|` in plugin names cannot collide. Test matrix grows to 11 suites / 350+ assertions.
+- **Client timers and fingerprints**: `checkNow`'s 500 ms ticker and 90 s watchdog are cleared on success, timeout, and unmount; `draftInNewSession` subscribes before the first fill and cannot leak a listener when the new session mounts synchronously; reminder fingerprints are JSON-encoded pairs so `@`/`|` in plugin names cannot collide. Test matrix grows to 11 suites / 362 assertions.
 
 ### v0.7.1 (2026-10-27)
 - **Fixed: the sidebar entry no longer squeezes other plugins out of its row.** The sidebar footer is a flex row shared by several plugins, and this one hard-coded `width: 100%` with `flex: none` — whenever another entry shared the row (for example the dsh-purge status dot), it took the entire width and left that entry a few pixels wide. It now uses `flex: 1 1 0%; min-width: 0`, spreading when there is room and shrinking when there isn't, with overlong titles handled by the existing ellipsis; the collapsed rail keeps an explicit `flex: 0 0 36px`, matching its previous width.

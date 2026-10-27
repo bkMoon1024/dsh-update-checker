@@ -173,7 +173,7 @@ dsh-update-checker/
 
 ## 🧪 自动化测试
 
-项目遵循严格的测试驱动开发规范，内置 11 个独立测试套件、覆盖 **350+ 项断言**，涵盖纯函数、出站层、HTTP 桥、端到端集成与宿主生命周期验证：
+项目遵循严格的测试驱动开发规范，内置 11 个独立测试套件、覆盖 **362 项断言**，涵盖纯函数、出站层、HTTP 桥、端到端集成与宿主生命周期验证：
 
 ```bash
 # 首次运行先装开发依赖（lifecycle / reminder-scheduler 需要真实的 @deepseek-ai/cordis）
@@ -192,7 +192,7 @@ npm run test:e2e
 - `test/checker.test.mjs`：69 项断言，覆盖版本比较精度/范围、来源判定、精确 pin 与状态流转；
 - `test/http.test.mjs`：28 项测试，覆盖 TTL 缓存、单飞合并、ETag 304、容量上限、错误体释放与熔断降级；
 - `test/host.test.mjs`：30 项测试，loopback 栅栏与 `node:http` → fetch 桥的真实 socket 行为（超大请求、断连、错误收敛）；
-- `test/integration.test.mjs`：30 项测试，脚本化网络模拟下的复杂检查流（含 `#semver:` 范围与 404 不回源镜像）；
+- `test/integration.test.mjs`：33 项测试，脚本化网络模拟下的复杂检查流（含 `#semver:` 范围、404 不回源镜像、两个 registry 传输失败时改用 CDN 备用源）；
 - `test/md.test.mjs`：23 项测试，深度校验 Markdown 语法解析保真度；
 - `test/render-harness.mjs`：客户端设置页与浮层气泡离线渲染冒烟测试；
 - `test/lifecycle.test.mjs`：真实 Cordis 4 环境下插件加载、卸载与资源释放测试；
@@ -212,8 +212,9 @@ npm run test:e2e
 - **`check.run` 的强制刷新加了 30 秒下限**：连点「立即检查」复用在途/刚完成的扫描，避免一轮又一轮烧掉 GitHub 匿名配额（90 秒非强制新鲜窗口保留）。
 - **扫描器的输入边界收紧**：profile `package.json` 不可读/非法 JSON 现在显式失败，不再伪装成「没有插件」；依赖名按 npm 形状校验，`../` 之类的键不会被拼进 `node_modules` 路径；packument 名称统一 `encodeURIComponent`；主 registry 404 不再回源 npmmirror（避免泄露私有包名）。
 - **版本判定修正**：超过 2^53 的版本段按字符串比较不再丢精度；`1`/`1.2` 视为 npm 范围而非精确 pin；`#semver:^1.2.0` 按范围选最高满足 tag，不再建议跨大版本；`git+ssh` / `ssh://` / `git://` / `scp` 形式的 GitHub 依赖恢复识别。
+- **npm 侧多了 CDN 备用源**：当两个 registry 都连不上（企业 TLS 解密网关、DNS 污染、registry 故障）时，改用 `unpkg` / `jsDelivr` 的 `package.json` 读最新版本号，npm 包不再整行变红；registry 明确 404（包不存在）时仍然不向任何第三方主机回源，传输失败的主机冷却 60 秒避免每条包都撞一次超时。新增集成测试覆盖普通名、scoped 名与「404 不走 CDN」。
 - **进程级内存与文件卫生**：HTTP 响应缓存加 400 条上限并在 fiber 卸载时清空；每次扫描的缓存结果按 profile 释放；提醒 `ignored` 表随扫描结果裁剪；配置/状态/快照文件以 0700/0600 写入且失败时清理临时文件；配置写失败不再回报「保存成功」。
-- **客户端定时器与指纹**：`checkNow` 的 500ms ticker / 90s watchdog 在成功、超时、卸载时都会被清理；`draftInNewSession` 先订阅再首次填充，同步挂载的新会话不会再留下永久监听；提醒指纹改为 JSON 数组编码，插件名里的 `@`/`|` 不再造成误判。测试矩阵扩到 11 个套件、350+ 断言。
+- **客户端定时器与指纹**：`checkNow` 的 500ms ticker / 90s watchdog 在成功、超时、卸载时都会被清理；`draftInNewSession` 先订阅再首次填充，同步挂载的新会话不会再留下永久监听；提醒指纹改为 JSON 数组编码，插件名里的 `@`/`|` 不再造成误判。测试矩阵扩到 11 个套件、362 断言。
 
 ### v0.7.1（2026-10-27）
 - **修复：侧栏入口被同一行的其它插件挤掉**。侧栏底部是多个插件共用的 flex 行，本插件此前写死 `width: 100%` 且 `flex: none`——只要同一行还有别的入口（例如「破甲」的状态点），空间就被本插件全额占走，另一个入口被压成几像素宽的灰点。改为 `flex: 1 1 0%; min-width: 0`：有空间就铺开，没空间就自己收，标题过长交给既有的省略号；折叠态（只剩图标）显式 `flex: 0 0 36px`，宽度与改动前一致。
